@@ -1,0 +1,11 @@
+version: '2'
+
+run:
+  allow-serial-runners: true
+
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: false

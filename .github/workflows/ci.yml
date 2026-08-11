@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
+      - name: Verify Go modules
+        run: |
+          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#default")"
+          just ci
