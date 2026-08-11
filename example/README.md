@@ -1,21 +1,19 @@
 # Go CLI E2E template
 
-This Testcontainers template demonstrates the reusable `github.com/totto2727-org/e2e/cli` package. The E2E helper module and this example are separate Go modules and Vite+ workspace projects. Running the example tests requires Docker and fails rather than skips when Docker is unavailable.
+This Testcontainers template demonstrates the reusable `github.com/totto2727-org/e2e/cli` package. The E2E helper module and this example are separate Go modules. Running the example tests requires Docker and fails rather than skips when Docker is unavailable.
 
 Run these commands from the repository root:
 
 ```sh
-vp run check
-vp run --filter @totto2727/e2e-example check
-vp run build
-vp run --filter @totto2727/e2e-example build
-vp run test
-go -C example test -race -shuffle=on -count=1 -v -parallel=2 ./...
+just check
+just build
+just test
+just e2e
 ```
 
-The `@totto2727/e2e-example` project intentionally omits the standard `test` task so repository workspace tests do not start Docker. Run its explicit `go test` command when Docker E2E coverage is required.
+The example intentionally keeps Docker execution behind the explicit `e2e` recipe so reusable package tests do not start Docker.
 
-For maintenance after editing dependencies or Go files, run each project's Vite+ `fix` task and run `go mod tidy` in both module directories.
+For maintenance after editing dependencies or Go files, run `just fix` and run `go mod tidy` in both module directories.
 
 `cli.Run` builds one uniquely tagged image from the caller's `cli.ImageConfig`, retains it only for the parent test, and creates a fresh container for every case. The library does not hard-code a base image: this example selects its `ubuntu:24.04` Dockerfile, while another consumer can provide a different build context and Dockerfile. At most two cases hold a slot at once; verbose output logs image and full container IDs, plus `started` and completion progress. Testcontainers cleans each case container and then the image-owning container, which removes the built image.
 

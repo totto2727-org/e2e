@@ -13,19 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: totto2727-org/monorepo/.github/actions/setup-nix@8bc15f4abe312f58b2f55ef9148c16bc19619a49
-      - name: Install workspace dependencies
-        run: nix develop --command bun install --frozen-lockfile
-      - name: Check Go modules
+      - uses: actions/checkout@v7
+      - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
+      - name: Verify Go modules
         run: |
-          nix develop --command vp run check
-          nix develop --command vp run --filter @totto2727/e2e-example check
-      - name: Test reusable package
-        run: nix develop --command vp run test
-      - name: Build Go modules
-        run: |
-          nix develop --command vp run build
-          nix develop --command vp run --filter @totto2727/e2e-example build
-      - name: Run Docker E2E example
-        run: nix develop --command go -C example test -race -shuffle=on -count=1 -v -parallel=2 ./...
+          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#default")"
+          just ci

@@ -1,4 +1,5 @@
-node_modules/
 .direnv/
+.omo/
 result
 result-*
+.DS_Store

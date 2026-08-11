@@ -1,7 +1,0 @@
-{
-  "name": "@totto2727/e2e-example",
-  "private": true,
-  "devDependencies": {
-    "vite-plus": "0.2.4"
-  }
-}

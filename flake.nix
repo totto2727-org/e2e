@@ -1,18 +1,11 @@
 {
   description = "Reusable Go CLI end-to-end test helpers";
 
-  inputs = {
-    nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1";
-    vite-plus-overlay = {
-      url = "github:ryoppippi/nix-vite-plus";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
+  inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1";
 
   outputs =
     {
       nixpkgs,
-      vite-plus-overlay,
       ...
     }:
     let
@@ -29,17 +22,14 @@
         let
           pkgs = import nixpkgs {
             inherit system;
-            overlays = [ vite-plus-overlay.overlays.default ];
           };
         in
         {
           default = pkgs.mkShell {
             packages = [
-              pkgs.bun
               pkgs.go
               pkgs.golangci-lint
-              pkgs.nodejs_24
-              pkgs.vite-plus
+              pkgs.just
             ];
           };
         }
