@@ -14,12 +14,14 @@ The root Go module owns the reusable package. The example module keeps Docker ex
 ### Execution rules
 
 - Run commands from the repository root unless a task explicitly targets `example/`.
+- Enter the toolchain environment with `nix develop` before running Just or Go commands.
 - Use Just as the task runner; this repository has no JavaScript workspace.
 - Keep Docker-backed tests behind the explicit `e2e` recipe.
 - Check every returned error and wrap errors with `%w` when adding context.
 
 ### Standard tasks
 
+- `nix develop` — Enter the environment that supplies Go, golangci-lint, and Just.
 - `just fix` — Format and autofix the root and example Go modules with golangci-lint.
 - `just check` — Check formatting and lint findings for both Go modules.
 - `just build` — Build both Go modules.
@@ -48,5 +50,13 @@ The root Go module owns the reusable package. The example module keeps Docker ex
 - **golangci-lint**: Formats and lints Go code.
 - **Just**: Runs repository development tasks.
 - **Nix**: Provides the Go, golangci-lint, and Just development shell.
+
+## Package-specific rules
+
+- Keep the reusable root module independent from the example module's local `replace` directive.
+- Keep Docker-backed scenarios opt-in through `just e2e`; unit and race tests must not require a Docker daemon.
+- Pass command arguments as argv entries and compare caller-visible exit codes, stdout, or copied file content explicitly.
+- Preserve bounded build and command contexts plus the two-case concurrency limit unless a measured requirement justifies changing them.
+- Run `just ci` inside `nix develop` before handoff when Docker is available; otherwise report the skipped Docker surface and run `just check`, `just build`, and `just test`.
 
 _This AGENTS.md was generated from the [share-artifact skill](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/SKILL.md) and [AGENTS template](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/agents/template.md)._

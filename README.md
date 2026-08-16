@@ -11,6 +11,7 @@ func TestCLI(t *testing.T) {
 			if err := environment.CheckStdout(cli.StdoutExpectation{
 				Command:  []string{"my-cli", "--version"},
 				ExitCode: 0,
+				Stdout:   "my-cli version 1.0.0\n",
 			}); err != nil {
 				t.Fatal(err)
 			}
