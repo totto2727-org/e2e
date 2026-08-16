@@ -1,22 +1,52 @@
-# Go CLI E2E template
+# Go CLI E2E example
 
-This Testcontainers template demonstrates the reusable `github.com/totto2727-org/e2e/cli` package. The E2E helper module and this example are separate Go modules. Running the example tests requires Docker and fails rather than skips when Docker is unavailable.
+This optional Testcontainers example demonstrates the reusable `github.com/totto2727-org/e2e/cli` package against a small Docker image.
 
-Run these commands from the repository root:
+## Usage
 
-```sh
-just check
-just build
-just test
+Run the example from the repository root:
+
+```bash
 just e2e
 ```
 
-The example intentionally keeps Docker execution behind the explicit `e2e` recipe so reusable package tests do not start Docker.
+## Key features
 
-For maintenance after editing dependencies or Go files, run `just fix` and run `go mod tidy` in both module directories.
+- Exercises exact command output and exit-code checks.
+- Exercises multi-command file creation and exact file-content checks.
+- Exercises expected non-zero CLI results without treating them as test failures.
 
-`cli.Run` builds one uniquely tagged image from the caller's `cli.ImageConfig`, retains it only for the parent test, and creates a fresh container for every case. The library does not hard-code a base image: this example selects its `ubuntu:24.04` Dockerfile, while another consumer can provide a different build context and Dockerfile. At most two cases hold a slot at once; verbose output logs image and full container IDs, plus `started` and completion progress. Testcontainers cleans each case container and then the image-owning container, which removes the built image.
+## Prerequisites
 
-`Environment.CheckStdout` verifies an argv command's exact exit code and multiplexed stdout/stderr stream. `Environment.CheckFile` copies and verifies one file. `Environment.Exec` is the lower-level primitive for custom checks. The multi-command file workflow stays in this example; consumers should similarly implement multiple-file or domain-specific workflows in their own case instead of extending the library with a workflow DSL.
+- **Go**: Go 1.25 or newer.
+- **Docker**: A running Docker daemon reachable by Testcontainers.
+- **Just**: Required for the root `just e2e` command.
 
-To test a real CLI, point `cli.ImageConfig` at a Dockerfile that builds or installs the CLI, then replace the sample argv values. Keep one parent image build, fresh case containers, and no host mounts.
+## Setup
+
+1. Clone the repository and enter its directory.
+
+```bash
+git clone https://github.com/totto2727-org/e2e.git
+cd e2e
+```
+
+2. Run the example.
+
+```bash
+just e2e
+```
+
+## API
+
+This module exposes no user-facing API; it is a runnable fixture for the reusable [`cli` package](../README.md#api).
+
+## Development
+
+For repository structure and development commands, see [the root AGENTS.md](../AGENTS.md).
+
+## License
+
+No license has been declared for this repository.
+
+_This README was generated from the [share-artifact skill](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/SKILL.md) and [README template](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/readme/template.md)._
