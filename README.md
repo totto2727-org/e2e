@@ -5,6 +5,14 @@ Reusable Go helpers for running CLI end-to-end test cases in isolated Testcontai
 ## Usage
 
 ```go
+package cli_test
+
+import (
+	"testing"
+
+	"github.com/totto2727-org/e2e/cli"
+)
+
 func TestCLI(t *testing.T) {
 	cli.Run(t, cli.ImageConfig{Context: ".", Dockerfile: "Dockerfile"}, []cli.Case{
 		{Name: "version", Run: func(t *testing.T, environment *cli.Environment) {
@@ -81,6 +89,7 @@ func versionScenario(t *testing.T, environment *cli.Environment) {
 	if err := environment.CheckStdout(cli.StdoutExpectation{
 		Command:  []string{"my-cli", "--version"},
 		ExitCode: 0,
+		Stdout:   "my-cli version 1.0.0\n",
 	}); err != nil {
 		t.Fatal(err)
 	}
