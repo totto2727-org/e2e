@@ -4,6 +4,8 @@ Reusable Go helpers for running CLI end-to-end test cases in isolated Testcontai
 
 ## Usage
 
+Build the CLI image before starting the Go test. This library assumes a prebuilt local image and intentionally does not build or remove images; `cli.Run` only resolves and uses the supplied image.
+
 ```go
 package cli_test
 
