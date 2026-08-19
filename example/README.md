@@ -10,6 +10,14 @@ Run the example from the repository root:
 just e2e
 ```
 
+A successful run builds the `e2e-example:local` image, reports each scenario as `PASS`, and finishes with an overall `PASS`:
+
+- `TestCLI/stdout` checks exit code `0` and the exact `hello from e2e\n` output.
+- `TestCLI/file_output` runs multiple commands, then checks the copied file contains exactly `first\nsecond\n`.
+- `TestCLI/expected_failure` checks that exit code `7` and `expected-failure\n` are handled as the expected result.
+
+To use the reusable package in your own tests, see the [root README usage](../README.md#usage).
+
 ## Key features
 
 - Exercises exact command output and exit-code checks.
