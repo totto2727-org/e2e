@@ -30,6 +30,8 @@ func TestCLI(t *testing.T) {
 }
 ```
 
+For runnable Docker commands and the exact passing scenarios they produce, see the [Go CLI E2E example](./example/README.md#usage).
+
 ## Key features
 
 - Reuses one caller-supplied image that was built before the test starts.
@@ -50,13 +52,6 @@ func TestCLI(t *testing.T) {
 
 ```bash
 go get github.com/totto2727-org/e2e
-```
-
-2. Build the image before running the Go test, then pass its name to `cli.Run`.
-
-```bash
-docker build --tag my-cli-e2e:local .
-go test ./...
 ```
 
 ## API
