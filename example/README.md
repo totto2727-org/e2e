@@ -4,7 +4,7 @@ This optional Testcontainers example demonstrates the reusable `github.com/totto
 
 ## Usage
 
-Run the example from the repository root:
+Run the checked-in example from the repository root:
 
 ```bash
 just e2e
@@ -32,17 +32,10 @@ To use the reusable package in your own tests, see the [root README usage](../RE
 
 ## Setup
 
-1. Clone the repository and enter its directory.
+1. Add the reusable helper package to the Go module that will own your copied E2E test.
 
 ```bash
-git clone https://github.com/totto2727-org/e2e.git
-cd e2e
-```
-
-2. Run the example.
-
-```bash
-just e2e
+go get github.com/totto2727-org/e2e/cli
 ```
 
 ## API
