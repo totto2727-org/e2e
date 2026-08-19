@@ -1,6 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-default: check
+default:
+    @just --list
 
 fix:
     golangci-lint fmt
@@ -14,4 +15,5 @@ build:
     go build ./...
 
 e2e:
-    go test -race -v -parallel=2 ./...
+	docker build --tag e2e-example:local .
+	go test -race -v -shuffle=on -count=1 -parallel=2 ./...
