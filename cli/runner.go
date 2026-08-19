@@ -2,36 +2,36 @@ package cli
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"sync/atomic"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
 )
 
 const (
-	maxParallelScenarios = 2
-	imageBuildTimeout    = 5 * time.Minute
-	scenarioTimeout      = time.Minute
+	maxParallelScenarios     = 2
+	imageLeaseCleanupTimeout = 30 * time.Second
+	scenarioTimeout          = time.Minute
 )
-
-var imageSequence atomic.Uint64
-
-type ImageConfig struct {
-	Context    string
-	Dockerfile string
-}
 
 type Case struct {
 	Name string
 	Run  func(*testing.T, *Environment)
 }
 
-func Run(t *testing.T, image ImageConfig, cases []Case) {
+func Run(t *testing.T, image string, cases []Case) {
 	t.Helper()
-	imageName := buildImage(t, image)
+	imageID, releaseImage, err := retainLocalImage(t.Context(), image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if releaseErr := releaseImage(); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	})
 	slots := make(chan struct{}, maxParallelScenarios)
 	for _, testCase := range cases {
 		t.Run(testCase.Name, func(t *testing.T) {
@@ -46,7 +46,7 @@ func Run(t *testing.T, image ImageConfig, cases []Case) {
 			t.Log("started")
 			t.Cleanup(func() { <-slots })
 			t.Cleanup(func() { t.Logf("completed pass=%t", !t.Failed()) })
-			container, err := testcontainers.Run(ctx, imageName)
+			container, err := testcontainers.Run(ctx, imageID)
 			testcontainers.CleanupContainer(t, container)
 			if err != nil {
 				t.Fatal(err)
@@ -57,20 +57,28 @@ func Run(t *testing.T, image ImageConfig, cases []Case) {
 	}
 }
 
-func buildImage(t *testing.T, image ImageConfig) string {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), imageBuildTimeout)
-	defer cancel()
-	repo := fmt.Sprintf("go-cli-e2e-%d", os.Getpid())
-	tag := fmt.Sprintf("%d-%d", time.Now().UnixNano(), imageSequence.Add(1))
-	imageName := repo + ":" + tag
-	owner, err := testcontainers.Run(ctx, "", testcontainers.WithDockerfile(testcontainers.FromDockerfile{
-		Context: image.Context, Dockerfile: image.Dockerfile, Repo: repo, Tag: tag, KeepImage: false,
-	}))
-	testcontainers.CleanupContainer(t, owner)
+func retainLocalImage(ctx context.Context, image string) (string, func() error, error) {
+	dockerClient, err := testcontainers.NewDockerClientWithOpts(ctx)
 	if err != nil {
-		t.Fatal(err)
+		return "", nil, err
 	}
-	t.Logf("image=%s image_owner=%s", imageName, owner.GetContainerID())
-	return imageName
+	inspected, err := dockerClient.ImageInspect(ctx, image)
+	if err != nil {
+		return "", nil, errors.Join(err, dockerClient.Close())
+	}
+	lease, err := dockerClient.ContainerCreate(ctx, client.ContainerCreateOptions{Image: inspected.ID})
+	if err != nil {
+		return "", nil, errors.Join(err, dockerClient.Close())
+	}
+	release := func() error {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), imageLeaseCleanupTimeout)
+		defer cleanupCancel()
+		_, removeErr := dockerClient.ContainerRemove(
+			cleanupCtx,
+			lease.ID,
+			client.ContainerRemoveOptions{},
+		)
+		return errors.Join(removeErr, dockerClient.Close())
+	}
+	return inspected.ID, release, nil
 }

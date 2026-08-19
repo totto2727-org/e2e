@@ -7,7 +7,7 @@ import (
 )
 
 func TestCLI(t *testing.T) {
-	cli.Run(t, cli.ImageConfig{Context: ".", Dockerfile: "Dockerfile"}, []cli.Case{
+	cli.Run(t, "e2e-example:local", []cli.Case{
 		{Name: "stdout", Run: stdoutScenario},
 		{Name: "file_output", Run: fileOutputScenario},
 		{Name: "expected_failure", Run: expectedFailureScenario},

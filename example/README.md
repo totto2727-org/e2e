@@ -19,7 +19,7 @@ just e2e
 ## Prerequisites
 
 - **Go**: Go 1.25 or newer.
-- **Docker**: A running Docker daemon reachable by Testcontainers.
+- **Docker**: The Docker CLI available on `PATH` for the pre-test build and a running daemon reachable by Testcontainers.
 - **Just**: Required for the root `just e2e` command.
 
 ## Setup

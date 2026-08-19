@@ -14,7 +14,7 @@ import (
 )
 
 func TestCLI(t *testing.T) {
-	cli.Run(t, cli.ImageConfig{Context: ".", Dockerfile: "Dockerfile"}, []cli.Case{
+	cli.Run(t, "my-cli-e2e:local", []cli.Case{
 		{Name: "version", Run: func(t *testing.T, environment *cli.Environment) {
 			if err := environment.CheckStdout(cli.StdoutExpectation{
 				Command:  []string{"my-cli", "--version"},
@@ -30,15 +30,17 @@ func TestCLI(t *testing.T) {
 
 ## Key features
 
-- Builds one caller-supplied Docker image and reuses it for every case.
-- Starts a fresh container for each case and removes Testcontainers resources after the test.
+- Reuses one caller-supplied image that was built before the test starts.
+- Resolves the image from the local Docker daemon and fails without pulling when the tag is missing.
+- Holds the image ID with a temporary stopped container and removes that lease after every case finishes.
+- Starts a fresh container for each case and removes Testcontainers resources after the test without removing the image.
 - Runs at most two cases concurrently while keeping each case isolated.
 - Verifies command exit codes, multiplexed output, and copied file contents.
 
 ## Prerequisites
 
 - **Go**: Go 1.25 or newer.
-- **Docker**: A running Docker daemon reachable by Testcontainers.
+- **Docker**: A running daemon reachable by Testcontainers and a prebuilt image for the CLI under test.
 
 ## Setup
 
@@ -48,21 +50,14 @@ func TestCLI(t *testing.T) {
 go get github.com/totto2727-org/e2e
 ```
 
-2. Point `cli.ImageConfig` at the Docker build context and Dockerfile for the CLI under test, then add cases to a Go test file.
+2. Build the image before running the Go test, then pass its name to `cli.Run`.
 
 ```bash
+docker build --tag my-cli-e2e:local .
 go test ./...
 ```
 
 ## API
-
-### `cli.ImageConfig`
-
-Describes the Docker build context and Dockerfile used for the shared test image.
-
-```go
-image := cli.ImageConfig{Context: ".", Dockerfile: "Dockerfile"}
-```
 
 ### `cli.Case`
 
@@ -74,10 +69,10 @@ caseDefinition := cli.Case{Name: "version", Run: versionScenario}
 
 ### `cli.Run`
 
-Builds the configured image once and runs each case in a fresh container.
+Resolves the prebuilt image locally, then runs each case in a fresh container without pulling or removing the image.
 
 ```go
-cli.Run(t, image, []cli.Case{caseDefinition})
+cli.Run(t, "my-cli-e2e:local", []cli.Case{caseDefinition})
 ```
 
 ### `cli.Environment`

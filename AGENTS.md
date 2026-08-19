@@ -33,9 +33,10 @@ The root Go module owns the reusable package. The example module keeps Docker ex
 
 ### Reusable package
 
-- `cli.Run` builds one caller-supplied image, then creates and cleans a fresh container for each `cli.Case`.
+- `cli.Run` resolves a prebuilt image from the local daemon without pulling, then creates and cleans a fresh container for each `cli.Case`.
+- A temporary stopped container retains the resolved image ID until every case completes; cleanup removes that lease, not the image.
 - `cli.Environment` owns the command and file assertion primitives used inside a case.
-- At most two cases run concurrently; image building and each case have bounded contexts.
+- At most two cases run concurrently; each case has a bounded context.
 
 ### Example module
 
@@ -46,7 +47,8 @@ The root Go module owns the reusable package. The example module keeps Docker ex
 ## Development tools
 
 - **Go 1.25**: Builds and tests both modules.
-- **Testcontainers for Go**: Builds images and manages isolated Docker containers.
+- **Docker CLI**: Builds the example image before the Go test starts.
+- **Testcontainers for Go**: Manages isolated Docker containers for each case.
 - **golangci-lint**: Formats and lints Go code.
 - **Just**: Runs repository development tasks.
 - **Nix**: Provides the Go, golangci-lint, and Just development shell.
