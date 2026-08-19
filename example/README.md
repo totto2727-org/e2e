@@ -32,10 +32,11 @@ To use the reusable package in your own tests, see the [root README usage](../RE
 
 ## Setup
 
-1. Add the reusable helper package to the Go module that will own your copied E2E test.
+1. Clone the checked-in example and enter the repository.
 
 ```bash
-go get github.com/totto2727-org/e2e/cli
+git clone https://github.com/totto2727-org/e2e.git
+cd e2e
 ```
 
 ## API
