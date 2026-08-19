@@ -1,6 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-default: ci
+default:
+    @just --list
 
 fix:
     golangci-lint fmt
