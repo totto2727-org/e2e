@@ -79,7 +79,7 @@ cli.Run(t, "my-cli-e2e:local", []cli.Case{caseDefinition})
 
 ### `cli.Environment`
 
-Provides command and file checks for one isolated case. The value is supplied to a `cli.Case` callback.
+Provides command and file primitives for one isolated case. The value is supplied to a `cli.Case` callback.
 
 ```go
 func versionScenario(t *testing.T, environment *cli.Environment) {
@@ -104,6 +104,21 @@ if err != nil {
 }
 if result.ExitCode != 0 {
 	t.Fatalf("status failed: %s", result.Stdout)
+}
+```
+
+### `cli.Command` and `(*cli.Environment).Run`
+
+Executes an argv command with a per-command working directory and environment, without a shell wrapper.
+
+```go
+result, err := environment.Run(cli.Command{
+	Args:       []string{"my-cli", "sync"},
+	WorkingDir: "/workspace/project",
+	Env:        []string{"HOME=/workspace/home"},
+})
+if err != nil {
+	t.Fatal(err)
 }
 ```
 
@@ -147,6 +162,33 @@ Describes a container file path and exact byte content for `CheckFile`.
 expectation := cli.FileExpectation{
 	Path:    "/workspace/result.txt",
 	Content: []byte("done\n"),
+}
+```
+
+### `cli.File` and `(*cli.Environment).WriteFile`
+
+Copies exact bytes into a container file with mode `0644`.
+
+```go
+if err := environment.WriteFile(cli.File{
+	Path:    "/workspace/config.json",
+	Content: []byte("{}\n"),
+}); err != nil {
+	t.Fatal(err)
+}
+```
+
+### `(*cli.Environment).ReadFile`
+
+Copies exact bytes from a container file for custom assertions.
+
+```go
+content, err := environment.ReadFile("/workspace/result.txt")
+if err != nil {
+	t.Fatal(err)
+}
+if string(content) != "done\n" {
+	t.Fatalf("content=%q", content)
 }
 ```
 
