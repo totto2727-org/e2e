@@ -43,12 +43,4 @@ cd e2e
 
 This module exposes no user-facing API; it is a runnable fixture for the reusable [`cli` package](../README.md#api).
 
-## Development
-
-For repository structure and development commands, see [the root AGENTS.md](../AGENTS.md).
-
-## License
-
-No license has been declared for this repository.
-
 _This README was generated from the [share-artifact skill](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/SKILL.md) and [README template](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/readme/template.md)._
