@@ -59,6 +59,8 @@ The root Go module owns the reusable package. The example module keeps Docker ex
 - Keep Docker-backed scenarios opt-in through `just e2e`; unit and race tests must not require a Docker daemon.
 - Pass command arguments as argv entries and compare caller-visible exit codes, stdout, or copied file content explicitly.
 - Preserve bounded build and command contexts plus the two-case concurrency limit unless a measured requirement justifies changing them.
+- Use `$implement-cli-e2e` when implementing or refactoring consumer Go/Testcontainers CLI scenarios.
+- Apply `$document-e2e-scenarios` to every scenario-bearing Go test file covered by that workflow; the sibling English Markdown and validator result are required parts of the change.
 - Run `just ci` inside `nix develop` before handoff when Docker is available; otherwise report the skipped Docker surface and run `just check`, `just build`, and `just test`.
 
 _This AGENTS.md was generated from the [share-artifact skill](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/SKILL.md) and [AGENTS template](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/agents/template.md)._
