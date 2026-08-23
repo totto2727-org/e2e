@@ -26,8 +26,7 @@ To use the reusable package in your own tests, see the [root README usage](../RE
 
 ## Prerequisites
 
-- **Go**: Go 1.25 or newer.
-- **Docker**: The Docker CLI available on `PATH` for the pre-test build and a running daemon reachable by Testcontainers.
+- The example inherits the repository's [Go and Docker requirements](../README.md#prerequisites).
 - **Just**: Required for the root `just e2e` command.
 
 ## Setup
