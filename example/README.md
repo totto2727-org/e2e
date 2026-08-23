@@ -26,8 +26,7 @@ To use the reusable package in your own tests, see the [root README usage](../RE
 
 ## Prerequisites
 
-- **Go**: Go 1.25 or newer.
-- **Docker**: The Docker CLI available on `PATH` for the pre-test build and a running daemon reachable by Testcontainers.
+- The example inherits the repository's [Go and Docker requirements](../README.md#prerequisites).
 - **Just**: Required for the root `just e2e` command.
 
 ## Setup
@@ -42,13 +41,5 @@ cd e2e
 ## API
 
 This module exposes no user-facing API; it is a runnable fixture for the reusable [`cli` package](../README.md#api).
-
-## Development
-
-For repository structure and development commands, see [the root AGENTS.md](../AGENTS.md).
-
-## License
-
-No license has been declared for this repository.
 
 _This README was generated from the [share-artifact skill](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/SKILL.md) and [README template](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/readme/template.md)._
