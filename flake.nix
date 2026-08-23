@@ -5,6 +5,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       ...
     }:
@@ -34,5 +35,32 @@
           };
         }
       );
+
+      packages = forEachSystem (system: let
+        pkgs = import nixpkgs {
+          inherit system;
+        };
+      in {
+          default = pkgs.writeShellApplication {
+            name = "e2e-example";
+            runtimeInputs = [
+              pkgs.docker
+              pkgs.go
+            ];
+            text = ''
+              docker build --tag e2e-example:local ${self}/example
+              cd ${self}/example
+              exec go test -race -v -shuffle=on -count=1 -parallel=2 ./...
+            '';
+          };
+        });
+
+      apps = forEachSystem (system: {
+        default = {
+          type = "app";
+          program = "${self.packages.${system}.default}/bin/e2e-example";
+          meta.description = "Run the checked-in Docker CLI E2E example";
+        };
+      });
     };
 }

@@ -4,17 +4,35 @@ This optional Testcontainers example demonstrates the reusable `github.com/totto
 
 ## Usage
 
-Run the checked-in example from the repository root:
+Run the example once without cloning the repository:
 
 ```bash
-just e2e
+nix run github:totto2727-org/e2e
 ```
 
 A successful run builds the `e2e-example:local` image, reports each scenario as `PASS`, and finishes with an overall `PASS`:
 
-- `TestCLI/stdout` checks exit code `0` and the exact `hello from e2e\n` output.
-- `TestCLI/file_output` runs multiple commands, then checks the copied file contains exactly `first\nsecond\n`.
-- `TestCLI/expected_failure` checks that exit code `7` and `expected-failure\n` are handled as the expected result.
+```text
+--- PASS: TestCLI
+    --- PASS: TestCLI/stdout
+    --- PASS: TestCLI/file_output
+    --- PASS: TestCLI/expected_failure
+PASS
+```
+
+The scenarios check exit code `0` with `hello from e2e\n`, multi-command file output of `first\nsecond\n`, and an expected exit code `7` with `expected-failure\n`.
+
+For a checked-out copy containing `flake.nix`, use the same launcher locally:
+
+```bash
+nix run .
+```
+
+After the one-time installation in Setup, run the launcher from any directory:
+
+```bash
+e2e-example
+```
 
 To use the reusable package in your own tests, see the [root README usage](../README.md#usage).
 
@@ -27,15 +45,14 @@ To use the reusable package in your own tests, see the [root README usage](../RE
 ## Prerequisites
 
 - The example inherits the repository's [Go and Docker requirements](../README.md#prerequisites).
-- **Just**: Required for the root `just e2e` command.
+- **Nix**: Required for the provided immediate and installed launchers.
 
 ## Setup
 
-1. Clone the checked-in example and enter the repository.
+1. Install the launcher when you want to run the example repeatedly.
 
 ```bash
-git clone https://github.com/totto2727-org/e2e.git
-cd e2e
+nix profile add github:totto2727-org/e2e
 ```
 
 ## API
