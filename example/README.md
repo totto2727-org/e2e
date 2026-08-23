@@ -49,11 +49,34 @@ To use the reusable package in your own tests, see the [root README usage](../RE
 
 ## Setup
 
-1. Install the launcher when you want to run the example repeatedly.
+### Run without permanent installation
+
+```bash
+nix run github:totto2727-org/e2e
+```
+
+### Install persistently
 
 ```bash
 nix profile add github:totto2727-org/e2e
 ```
+
+### Use from a consumer flake
+
+Expose the upstream package and app from the consumer's `flake.nix`:
+
+```nix
+{
+  inputs.e2e.url = "github:totto2727-org/e2e";
+
+  outputs = { e2e, ... }: {
+    packages.aarch64-darwin.e2e-example = e2e.packages.aarch64-darwin.default;
+    apps.aarch64-darwin.e2e-example = e2e.apps.aarch64-darwin.default;
+  };
+}
+```
+
+Run the exposed app with `nix run .#e2e-example`.
 
 ## API
 
