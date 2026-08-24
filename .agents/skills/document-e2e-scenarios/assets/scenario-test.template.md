@@ -10,15 +10,15 @@ Explain the single user-visible behavior covered by this scenario.
 
 ### Commands under test
 
-| Command | Purpose |
+| Command path | Purpose |
 | --- | --- |
-| `my-cli ...` | Describe the behavior exercised by this invocation. |
+| `my-cli subcommand` | Describe the behavior exercised through this command path. |
 
 ### Arguments and options
 
-| Argument or option | Applies to | Purpose |
-| --- | --- | --- |
-| `--example` | `my-cli ...` | Explain the tested meaning. |
+| Argument or option | Purpose |
+| --- | --- |
+| `--example` | Explain the tested meaning. |
 
 ### Preconditions and fixtures
 
@@ -27,7 +27,7 @@ Explain the single user-visible behavior covered by this scenario.
 
 ### Execution flow
 
-1. Describe the first command and why it runs first.
+1. Write the complete first invocation, including argv order, and explain why it runs first.
 2. Describe subsequent mutations and commands in exact order.
 
 ### Expected results

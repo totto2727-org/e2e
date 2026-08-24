@@ -10,15 +10,15 @@ Verify that the CLI image can print a caller-visible greeting successfully.
 
 ### Commands under test
 
-| Command | Purpose |
+| Command path | Purpose |
 | --- | --- |
-| `echo "hello from e2e"` | Print the expected greeting. |
+| `echo` | Print the expected greeting. |
 
 ### Arguments and options
 
-| Argument or option | Applies to | Purpose |
-| --- | --- | --- |
-| `hello from e2e` | `echo` | Supply the exact greeting text. |
+| Argument or option | Purpose |
+| --- | --- |
+| `hello from e2e` | Supply the exact greeting as one positional argument. |
 
 ### Preconditions and fixtures
 
@@ -27,7 +27,7 @@ Verify that the CLI image can print a caller-visible greeting successfully.
 
 ### Execution flow
 
-1. Run `echo` with the greeting as a separate argv entry.
+1. Run `echo "hello from e2e"`, passing the greeting as one argv entry after `echo`.
 2. Capture the exit status and standard output.
 
 ### Expected results
@@ -51,15 +51,15 @@ Verify that an expected nonzero CLI result remains observable without failing th
 
 ### Commands under test
 
-| Command | Purpose |
+| Command path | Purpose |
 | --- | --- |
 | `false` | Produce the expected nonzero exit status. |
 
 ### Arguments and options
 
-| Argument or option | Applies to | Purpose |
-| --- | --- | --- |
-| None | `false` | The command takes no arguments in this scenario. |
+| Argument or option | Purpose |
+| --- | --- |
+| None | The command takes no arguments in this scenario. |
 
 ### Preconditions and fixtures
 

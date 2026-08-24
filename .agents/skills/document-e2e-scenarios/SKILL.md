@@ -24,7 +24,7 @@ Keep human-readable scenario intent beside executable Go E2E tests so reviewers 
 3. Copy [the scenario template](assets/scenario-test.template.md) beside the Go source and rename it to `<stem>_test.md`.
 4. Duplicate the complete scenario block beginning with the `##` heading once for every `*Scenario` function, preserving source order, then replace every placeholder.
 5. Remove unused optional rows instead of leaving empty prose. Keep each scenario's commands, arguments, fixtures, execution flow, results, and notes inside that scenario's section.
-6. List the complete command path and flags in execution order. Include repeated, invalid, global, recursive, or forced variants when exercised.
+6. List each executable and subcommand path without arguments or options under `Commands under test`. List argument and option tokens with their purpose under `Arguments and options`; do not add an `Applies to` column. Put each complete invocation and its argv order under `Execution flow`.
 7. Separate expected results into exit status, stdout, persisted JSON, filesystem/link state, and non-mutation guarantees where relevant.
 8. Link the document back to its sibling Go source with `[<stem>_test.go](./<stem>_test.go)`.
 9. Run the validator from the skill directory:
