@@ -8,27 +8,31 @@ from pathlib import Path
 
 MAX_FILE_SIZE = 1_048_576
 SCENARIO_PATTERN = re.compile(r"^func\s+([A-Za-z0-9_]+Scenario)\s*\(", re.MULTILINE)
-REQUIRED_HEADINGS = (
-    "## Scope",
-    "## Commands under test",
-    "## Arguments and options",
-    "## Preconditions and fixtures",
-    "## Execution flow",
-    "## Expected results",
-    "## Notes",
+REQUIRED_SCENARIO_HEADINGS = (
+    "### Scope",
+    "### Commands under test",
+    "### Arguments and options",
+    "### Preconditions and fixtures",
+    "### Execution flow",
+    "### Expected results",
+    "### Notes",
 )
 PLACEHOLDER_PATTERN = re.compile(r"\{\{[^}]+\}\}|\b(?:TODO|TBD)\b", re.IGNORECASE)
+
+
+class _FileValidationError(ValueError):
+    pass
 
 
 def read_regular_text(path: Path, root: Path) -> str:
     metadata = path.lstat()
     if not stat.S_ISREG(metadata.st_mode):
-        raise ValueError(f"{path}: expected a regular file without symlinks")
+        raise _FileValidationError(f"{path}: expected a regular file without symlinks")
     if metadata.st_size > MAX_FILE_SIZE:
-        raise ValueError(f"{path}: exceeds the {MAX_FILE_SIZE}-byte limit")
+        raise _FileValidationError(f"{path}: exceeds the {MAX_FILE_SIZE}-byte limit")
     resolved = path.resolve(strict=True)
     if not resolved.is_relative_to(root):
-        raise ValueError(f"{path}: resolves outside scenario root {root}")
+        raise _FileValidationError(f"{path}: resolves outside scenario root {root}")
     return path.read_text(encoding="utf-8")
 
 
@@ -122,26 +126,43 @@ def validate_document(
     if expected_link not in prose:
         errors.append(f"{document}: missing source link {expected_link}")
 
-    positions: list[int] = []
-    for heading in REQUIRED_HEADINGS:
-        matches = [
-            index for index, line in enumerate(lines) if line.rstrip() == heading
-        ]
-        if len(matches) != 1:
-            errors.append(f"{document}: expected exactly one heading {heading}")
-        else:
-            positions.append(matches[0])
-    if positions != sorted(positions):
-        errors.append(f"{document}: required headings are out of order")
+    second_level_headings = [
+        (index, line.rstrip())
+        for index, line in enumerate(lines)
+        if line.startswith("## ")
+    ]
+    expected_scenario_headings = tuple(f"## `{function}`" for function in functions)
+    actual_scenario_headings = tuple(heading for _, heading in second_level_headings)
+    if actual_scenario_headings != expected_scenario_headings:
+        errors.append(
+            f"{document}: scenario sections must be exactly "
+            f"{', '.join(expected_scenario_headings)} in source order"
+        )
 
-    scope = (
-        "\n".join(lines[positions[0] + 1 : positions[1]])
-        if len(positions) == len(REQUIRED_HEADINGS)
-        else ""
-    )
-    for function in functions:
-        if f"`{function}`" not in scope:
-            errors.append(f"{document}: Scope must name `{function}`")
+    for section_index, (position, expected_heading) in enumerate(second_level_headings):
+        if expected_heading not in expected_scenario_headings:
+            continue
+        section_end = (
+            second_level_headings[section_index + 1][0]
+            if section_index + 1 < len(second_level_headings)
+            else len(lines)
+        )
+        section_lines = lines[position + 1 : section_end]
+        heading_positions: list[int] = []
+        for heading in REQUIRED_SCENARIO_HEADINGS:
+            matches = [
+                index
+                for index, line in enumerate(section_lines)
+                if line.rstrip() == heading
+            ]
+            if len(matches) != 1:
+                errors.append(
+                    f"{document}: {expected_heading} must contain exactly one {heading}"
+                )
+            else:
+                heading_positions.append(matches[0])
+        if heading_positions != sorted(heading_positions):
+            errors.append(f"{document}: {expected_heading} headings are out of order")
 
     placeholder = PLACEHOLDER_PATTERN.search(text)
     if placeholder is not None:

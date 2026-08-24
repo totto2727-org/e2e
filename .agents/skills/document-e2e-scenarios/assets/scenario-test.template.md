@@ -1,34 +1,36 @@
-# {{SCENARIO_TITLE}}
+# {{SCENARIO_FILE_TITLE}}
 
 Source: [{{SOURCE_FILE}}](./{{SOURCE_FILE}})
 
-## Scope
+## `{{SCENARIO_FUNCTION}}`
 
-Explain the user-visible behavior and list every `*Scenario` function covered by this file.
+### Scope
 
-## Commands under test
+Explain the single user-visible behavior covered by this scenario.
+
+### Commands under test
 
 | Command | Purpose |
 | --- | --- |
 | `my-cli ...` | Describe the behavior exercised by this invocation. |
 
-## Arguments and options
+### Arguments and options
 
 | Argument or option | Applies to | Purpose |
 | --- | --- | --- |
 | `--example` | `my-cli ...` | Explain the tested meaning. |
 
-## Preconditions and fixtures
+### Preconditions and fixtures
 
 - Describe the isolated HOME and working directory.
 - Describe configuration, domain fixtures, persisted state, and foreign paths created before the first command.
 
-## Execution flow
+### Execution flow
 
 1. Describe the first command and why it runs first.
 2. Describe subsequent mutations and commands in exact order.
 
-## Expected results
+### Expected results
 
 | Observation | Expected result |
 | --- | --- |
@@ -37,6 +39,6 @@ Explain the user-visible behavior and list every `*Scenario` function covered by
 | Persisted state | Describe configuration and state-file expectations. |
 | Filesystem | Describe created, preserved, replaced, or removed paths and symlink targets. |
 
-## Notes
+### Notes
 
 - Record normalization, idempotency, ownership, isolation, or intentionally untested behavior when relevant.

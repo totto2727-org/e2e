@@ -32,4 +32,4 @@
 
 ## Documentation contract
 
-Apply `$document-e2e-scenarios` for every scenario-bearing Go file. Copy its bundled template, preserve the sibling naming contract, and run its validator before completion. The source and document belong in the same commit because either artifact alone is incomplete.
+Apply `$document-e2e-scenarios` for every scenario-bearing Go file. Copy its bundled template, preserve the sibling naming contract, and keep every scenario in its own complete second-level section. Read the bundled concrete Go/Markdown example pair and run the validator before completion. The source and document belong in the same commit because either artifact alone is incomplete.

@@ -15,10 +15,11 @@ Build each CLI scenario as an isolated Go test that exercises observable behavio
 Read and apply `$document-e2e-scenarios` before changing a scenario. Scenario documentation is part of the implementation, not a follow-up:
 
 1. Create or update the sibling `<stem>_test.md` from the documentation skill's `assets/scenario-test.template.md`.
-2. Keep commands, options, fixture setup, execution order, output, and state expectations synchronized with the Go source.
-3. Run the documentation skill's `scripts/validate_scenario_docs.py` against the scenario package.
-4. Treat a missing, stale, or validator-failing document as a blocking implementation failure.
-5. Commit the Go scenario and its document together.
+2. Use the documentation skill's complete [Go example](../document-e2e-scenarios/references/example/multiple_scenarios_test.go) and [sibling Markdown example](../document-e2e-scenarios/references/example/multiple_scenarios_test.md) as the concrete file-pair reference.
+3. Keep commands, options, fixture setup, execution order, output, and state expectations synchronized with the Go source.
+4. Run the documentation skill's `scripts/validate_scenario_docs.py` against the scenario package.
+5. Treat a missing, stale, or validator-failing document as a blocking implementation failure.
+6. Commit the Go scenario and its document together.
 
 Do not report the scenario complete until the documentation validator passes.
 
@@ -59,7 +60,7 @@ Do not report the scenario complete until the documentation validator passes.
 
 ### 6. Document every scenario
 
-Invoke `$document-e2e-scenarios`, copy its template beside every scenario-bearing `*_test.go`, and describe the executable behavior in English. A Go file with multiple scenario functions has one sibling document with clearly named subsections for each scenario.
+Invoke `$document-e2e-scenarios`, copy its template beside every scenario-bearing `*_test.go`, and describe the executable behavior in English. A Go file with multiple scenario functions has one sibling document containing one complete second-level section, headed by the backtick-wrapped function name, per scenario; never aggregate different scenarios under shared topic sections.
 
 ### 7. Verify the real surface
 
