@@ -137,6 +137,33 @@ Source: [health_test.go](./health_test.go)
 
             self.assertIn("scenario sections must be exactly", "\n".join(errors))
 
+    def test_rejects_non_ascii_closing_fence_whitespace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "health_test.go"
+            source.write_text("func healthScenario() {}\n", encoding="utf-8")
+            source.with_suffix(".md").write_text(
+                """# Health
+
+Source: [health_test.go](./health_test.go)
+
+```markdown
+```[NBSP]
+## `healthScenario`
+### Scope
+### Commands under test
+### Arguments and options
+### Preconditions and fixtures
+### Execution flow
+### Expected results
+### Notes
+""".replace("[NBSP]", "\N{NO-BREAK SPACE}"),
+                encoding="utf-8",
+            )
+
+            errors = validator.validate_document(source, ("healthScenario",))
+
+            self.assertIn("scenario sections must be exactly", "\n".join(errors))
+
     def test_ignores_scenario_text_inside_go_raw_strings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
