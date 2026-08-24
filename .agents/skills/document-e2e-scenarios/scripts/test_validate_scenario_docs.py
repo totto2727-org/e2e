@@ -108,6 +108,35 @@ Source: [health_test.go](./health_test.go)
 
             self.assertIn("scenario sections must be exactly", "\n".join(errors))
 
+    def test_requires_scenario_heading_outside_long_fences(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "health_test.go"
+            source.write_text("func healthScenario() {}\n", encoding="utf-8")
+            source.with_suffix(".md").write_text(
+                """# Health
+
+Source: [health_test.go](./health_test.go)
+
+````markdown
+```
+## `healthScenario`
+### Scope
+### Commands under test
+### Arguments and options
+### Preconditions and fixtures
+### Execution flow
+### Expected results
+### Notes
+```
+````
+""",
+                encoding="utf-8",
+            )
+
+            errors = validator.validate_document(source, ("healthScenario",))
+
+            self.assertIn("scenario sections must be exactly", "\n".join(errors))
+
     def test_ignores_scenario_text_inside_go_raw_strings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

@@ -18,6 +18,7 @@ REQUIRED_SCENARIO_HEADINGS = (
     "### Notes",
 )
 PLACEHOLDER_PATTERN = re.compile(r"\{\{[^}]+\}\}|\b(?:TODO|TBD)\b", re.IGNORECASE)
+MARKDOWN_FENCE_PATTERN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 class _FileValidationError(ValueError):
@@ -88,17 +89,25 @@ def markdown_prose(text: str) -> str:
     lines: list[str] = []
     fence = ""
     for line in text.splitlines():
-        stripped = line.lstrip()
-        marker = stripped[:3]
+        match = MARKDOWN_FENCE_PATTERN.fullmatch(line)
         if fence:
-            if marker == fence:
-                fence = ""
+            if match is not None:
+                marker, suffix = match.groups()
+                if (
+                    marker[0] == fence[0]
+                    and len(marker) >= len(fence)
+                    and not suffix.strip()
+                ):
+                    fence = ""
             lines.append("")
-        elif marker in {"```", "~~~"}:
-            fence = marker
-            lines.append("")
-        else:
-            lines.append(line)
+            continue
+        if match is not None:
+            marker, info = match.groups()
+            if marker[0] == "~" or "`" not in info:
+                fence = marker
+                lines.append("")
+                continue
+        lines.append(line)
     return "\n".join(lines)
 
 
