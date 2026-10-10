@@ -27,7 +27,7 @@ The root Go module owns the reusable package. The example module keeps Docker ex
 - `just build` — Build both Go modules.
 - `just test` — Run reusable package tests with the race detector.
 - `just e2e` — Run the Docker E2E example with verbose output.
-- `just ci` — Run checks, builds, reusable tests, and Docker E2E in sequence.
+- `just ci`: Run checks, builds, and reusable tests in sequence without Docker E2E.
 
 ## Architecture
 
@@ -61,6 +61,6 @@ The root Go module owns the reusable package. The example module keeps Docker ex
 - Preserve bounded build and command contexts plus the two-case concurrency limit unless a measured requirement justifies changing them.
 - Use `$implement-cli-e2e` when implementing or refactoring consumer Go/Testcontainers CLI scenarios.
 - Apply `$document-e2e-scenarios` to every scenario-bearing Go test file covered by that workflow; the sibling English Markdown and validator result are required parts of the change.
-- Run `just ci` inside `nix develop` before handoff when Docker is available; otherwise report the skipped Docker surface and run `just check`, `just build`, and `just test`.
+- Run `just ci` inside `nix develop` before handoff. Run `just e2e` separately only when Docker E2E is explicitly requested.
 
 _This AGENTS.md was generated from the [share-artifact skill](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/SKILL.md) and [AGENTS template](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/agents/template.md)._

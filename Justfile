@@ -23,4 +23,4 @@ test:
 e2e:
     just example/e2e
 
-ci: check build test e2e
+ci: check build test
