@@ -81,7 +81,13 @@ func execCommand(ctx context.Context, executor dockerExecutor, containerID strin
 // newExecClient preserves Testcontainers' daemon and TLS dialer while making
 // cancellation close the connection during the HTTP upgrade as well as output
 // reads. The separate client avoids mutating the caller's transport.
-func newExecClient(base *client.Client) (*client.Client, error) {
+func newExecClient(ctx context.Context, base *client.Client) (*client.Client, error) {
+	// A newly created Testcontainers client has not necessarily made a request.
+	// Resolve its lazy API negotiation before cloning the effective version.
+	// Ping respects an explicit DOCKER_API_VERSION override.
+	if _, err := base.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		return nil, fmt.Errorf("negotiate exec API version: %w", err)
+	}
 	dial := base.Dialer()
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		conn, err := dial(ctx)

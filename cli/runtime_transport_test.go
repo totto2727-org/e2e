@@ -18,6 +18,47 @@ import (
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 )
 
+func TestExecClient_negotiates_before_cloning_version(t *testing.T) {
+	for _, fixedVersion := range []string{"", "1.47"} {
+		name := "automatic"
+		wantVersion := "1.48"
+		if fixedVersion != "" {
+			name = "explicit"
+			wantVersion = fixedVersion
+		}
+		t.Run(name, func(t *testing.T) {
+			handler, _, _ := execTransportHandler(t, false)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/_ping" {
+					w.Header().Set("API-Version", "1.48")
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				if !strings.HasPrefix(request.URL.Path, "/v"+wantVersion+"/") {
+					t.Errorf("request=%s want API %s", request.URL.Path, wantVersion)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				handler.ServeHTTP(w, request)
+			}))
+			t.Cleanup(server.Close)
+			options := []client.Opt{client.WithHost("tcp://" + strings.TrimPrefix(server.URL, "http://"))}
+			if fixedVersion != "" {
+				options = append(options, client.WithAPIVersion(fixedVersion))
+			}
+			base, err := client.New(options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// No base request occurs before newExecClient: this was the CI failure.
+			assertTransportExec(t, base)
+			if base.ClientVersion() != wantVersion {
+				t.Fatalf("version=%s want=%s", base.ClientVersion(), wantVersion)
+			}
+		})
+	}
+}
+
 func TestExecClient_preserves_TLS_transport(t *testing.T) {
 	handler, _, _ := execTransportHandler(t, false)
 	server := httptest.NewTLSServer(handler)
@@ -109,7 +150,7 @@ func transportExecutor(t *testing.T, base *client.Client) *client.Client {
 			t.Error(err)
 		}
 	})
-	executor, err := newExecClient(base)
+	executor, err := newExecClient(t.Context(), base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +186,9 @@ func execTransportHandler(t *testing.T, cancelStream bool) (http.Handler, <-chan
 	closed := make(chan struct{})
 	handler := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
+		case request.URL.Path == "/_ping":
+			w.Header().Set("API-Version", "1.54")
+			w.WriteHeader(http.StatusOK)
 		case strings.HasSuffix(request.URL.Path, "/containers/container/exec"):
 			w.Header().Set("Content-Type", "application/json")
 			if _, err := io.WriteString(w, `{"Id":"exec"}`); err != nil {

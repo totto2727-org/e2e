@@ -67,7 +67,7 @@ func Run(t *testing.T, image string, cases []Case) {
 					t.Error(err)
 				}
 			})
-			executor, err := newExecClient(base.Client)
+			executor, err := newExecClient(ctx, base.Client)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -115,6 +115,9 @@ func TestExecClient_cancels_stalled_upgrade_and_stream(t *testing.T) {
 			closed := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 				switch {
+				case request.URL.Path == "/_ping":
+					w.Header().Set("API-Version", "1.54")
+					w.WriteHeader(http.StatusOK)
 				case strings.HasSuffix(request.URL.Path, "/containers/container/exec"):
 					w.Header().Set("Content-Type", "application/json")
 					if _, err := io.WriteString(w, `{"Id":"exec"}`); err != nil {
@@ -166,7 +169,7 @@ func TestExecClient_cancels_stalled_upgrade_and_stream(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			executor, err := newExecClient(base)
+			executor, err := newExecClient(t.Context(), base)
 			if err != nil {
 				t.Fatal(err)
 			}
