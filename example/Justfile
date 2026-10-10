@@ -16,4 +16,5 @@ build:
 
 e2e:
 	docker build --tag e2e-example:local .
-	go test -race -v -shuffle=on -count=1 -parallel=2 ./...
+	go test -race -v -shuffle=on -count=1 -parallel=8 -timeout=5m ./...
+	image_id=$(docker image inspect e2e-example:local --format '{{{{.Id}}'); remaining=$(docker ps --all --filter "ancestor=$image_id" --format '{{{{.ID}}'); test -z "$remaining"

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 const (
 	maxParallelScenarios     = 2
 	imageLeaseCleanupTimeout = 30 * time.Second
+	containerCleanupTimeout  = 30 * time.Second
 	scenarioTimeout          = time.Minute
 )
 
@@ -36,25 +38,76 @@ func Run(t *testing.T, image string, cases []Case) {
 	for _, testCase := range cases {
 		t.Run(testCase.Name, func(t *testing.T) {
 			t.Parallel()
-			ctx, cancel := context.WithTimeout(t.Context(), scenarioTimeout)
-			defer cancel()
-			select {
-			case slots <- struct{}{}:
-			case <-ctx.Done():
-				t.Fatal(ctx.Err())
+			ctx, cancel, err := acquireScenario(t.Context(), slots, scenarioTimeout)
+			if err != nil {
+				t.Fatal(err)
 			}
+			defer cancel()
 			t.Log("started")
 			t.Cleanup(func() { <-slots })
 			t.Cleanup(func() { t.Logf("completed pass=%t", !t.Failed()) })
 			container, err := testcontainers.Run(ctx, imageID)
-			testcontainers.CleanupContainer(t, container)
+			t.Cleanup(func() {
+				if container != nil {
+					if err := cleanupContainer(container, containerCleanupTimeout); err != nil {
+						t.Error(err)
+					}
+				}
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Logf("container=%s", container.GetContainerID())
-			testCase.Run(t, &Environment{ctx: ctx, container: container})
+			base, err := testcontainers.NewDockerClientWithOpts(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := base.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			executor, err := newExecClient(base.Client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := executor.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			testCase.Run(t, &Environment{ctx: ctx, container: &dockerRuntime{DockerContainer: container, executor: executor}})
 		})
 	}
+}
+
+// The scenario budget starts only after a slot is acquired. Queue cancellation
+// follows the parent test, not another scenario's execution budget.
+func acquireScenario(parent context.Context, slots chan struct{}, timeout time.Duration) (context.Context, context.CancelFunc, error) {
+	select {
+	case slots <- struct{}{}:
+	case <-parent.Done():
+		return nil, nil, parent.Err()
+	}
+	if err := parent.Err(); err != nil {
+		<-slots
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	return ctx, cancel, nil
+}
+
+type terminableContainer interface {
+	Terminate(context.Context, ...testcontainers.TerminateOption) error
+}
+
+func cleanupContainer(container terminableContainer, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := container.Terminate(ctx); err != nil {
+		return fmt.Errorf("terminate scenario container: %w", err)
+	}
+	return nil
 }
 
 func retainLocalImage(ctx context.Context, image string) (string, func() error, error) {

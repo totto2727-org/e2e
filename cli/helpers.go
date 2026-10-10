@@ -7,12 +7,21 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/moby/moby/api/pkg/stdcopy"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 )
 
+// Result preserves the legacy concatenation of stdout followed by stderr in Stdout.
 type Result struct {
 	ExitCode int
 	Stdout   string
+}
+
+// CommandResult contains a command's exit code and separate output streams.
+type CommandResult struct {
+	ExitCode int
+	Stdout   string
+	Stderr   string
 }
 
 type Command struct {
@@ -51,7 +60,21 @@ func (e *Environment) Exec(command []string) (Result, error) {
 }
 
 func (e *Environment) Run(command Command) (Result, error) {
-	options := []tcexec.ProcessOption{tcexec.Multiplexed()}
+	result, err := e.RunSeparated(command)
+	return Result{ExitCode: result.ExitCode, Stdout: result.Stdout + result.Stderr}, err
+}
+
+// RunSeparated executes a command and preserves its stdout and stderr separately.
+func (e *Environment) RunSeparated(command Command) (CommandResult, error) {
+	var stdout, stderr bytes.Buffer
+	var demuxErr error
+	options := []tcexec.ProcessOption{tcexec.ProcessOptionFunc(func(opts *tcexec.ProcessOptions) {
+		if opts.Reader == nil {
+			return
+		}
+		_, demuxErr = stdcopy.StdCopy(&stdout, &stderr, opts.Reader)
+		opts.Reader = bytes.NewReader(stdout.Bytes())
+	})}
 	if command.WorkingDir != "" {
 		options = append(options, tcexec.WithWorkingDir(command.WorkingDir))
 	}
@@ -60,13 +83,16 @@ func (e *Environment) Run(command Command) (Result, error) {
 	}
 	exitCode, output, err := e.container.Exec(e.ctx, command.Args, options...)
 	if err != nil {
-		return Result{ExitCode: exitCode}, fmt.Errorf("exec %q: %w", command.Args, err)
+		return CommandResult{ExitCode: exitCode}, fmt.Errorf("exec %q: %w", command.Args, err)
+	}
+	if demuxErr != nil {
+		return CommandResult{ExitCode: exitCode}, fmt.Errorf("demultiplex output for %q: %w", command.Args, demuxErr)
 	}
 	data, err := io.ReadAll(output)
 	if err != nil {
-		return Result{ExitCode: exitCode}, fmt.Errorf("read output for %q: %w", command.Args, err)
+		return CommandResult{ExitCode: exitCode}, fmt.Errorf("read output for %q: %w", command.Args, err)
 	}
-	return Result{ExitCode: exitCode, Stdout: string(data)}, nil
+	return CommandResult{ExitCode: exitCode, Stdout: string(data), Stderr: stderr.String()}, nil
 }
 
 func (e *Environment) CheckStdout(expectation StdoutExpectation) error {
