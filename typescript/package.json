@@ -1,0 +1,42 @@
+{
+  "name": "@totto2727/e2e-cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Isolated Linux-container CLI E2E helpers",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./vitest": {
+      "types": "./dist/vitest.d.mts",
+      "import": "./dist/vitest.mjs"
+    }
+  },
+  "dependencies": {
+    "tar-stream": "^3.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "@types/tar-stream": "^3.1.5",
+    "typescript": "^7.0.2",
+    "vite-plus": "^1.1.0"
+  },
+  "peerDependencies": {
+    "vitest": "^5.0.3"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.21.0"
+}
