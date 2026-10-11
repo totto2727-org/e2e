@@ -1,8 +1,8 @@
-module github.com/totto2727-org/e2e/example
+module github.com/totto2727-org/e2e/go/example
 
 go 1.25.0
 
-require github.com/totto2727-org/e2e v0.0.0
+require github.com/totto2727-org/e2e/go v0.0.0
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
@@ -58,4 +58,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/totto2727-org/e2e => ..
+replace github.com/totto2727-org/e2e/go => ..

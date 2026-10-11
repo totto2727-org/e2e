@@ -8,7 +8,7 @@ metadata:
 
 # Implement CLI E2E
 
-Build each CLI scenario as an isolated Go test that exercises observable behavior through the shared `totto2727-org/e2e/cli` API.
+Build each CLI scenario as an isolated Go test that exercises observable behavior through the shared `github.com/totto2727-org/e2e/go/cli` API.
 
 ## Required companion skill
 

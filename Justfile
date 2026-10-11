@@ -4,23 +4,18 @@ default:
     @just --list
 
 fix:
-    golangci-lint fmt
-    golangci-lint run --fix ./...
-    just example/fix
+    just go/fix
 
 check:
-    golangci-lint fmt --diff
-    golangci-lint run ./...
-    just example/check
+    just go/check
 
 build:
-    go build ./...
-    just example/build
+    just go/build
 
 test:
-    go test -race ./...
+    just go/test
 
 e2e:
-    just example/e2e
+    just go/e2e
 
 ci: check build test

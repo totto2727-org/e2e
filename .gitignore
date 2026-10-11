@@ -3,3 +3,9 @@
 result
 result-*
 .DS_Store
+tmp/
+typescript/tmp/
+**/node_modules/
+typescript/dist/
+haskell/dist-newstyle/
+rust/target/

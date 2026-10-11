@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/totto2727-org/e2e/cli"
+	"github.com/totto2727-org/e2e/go/cli"
 )
 
 func TestCLI(t *testing.T) {
@@ -22,10 +22,10 @@ func TestCLI(t *testing.T) {
 
 func stdoutScenario(t *testing.T, environment *cli.Environment) {
 	t.Helper()
-	if err := environment.CheckStdout(cli.StdoutExpectation{
-		Command:  []string{"echo", "hello from e2e"},
+	if err := environment.CheckCommand(cli.Command{Args: []string{"echo", "hello from e2e"}}, cli.Result{
 		ExitCode: 0,
 		Stdout:   "hello from e2e\n",
+		Stderr:   "",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -33,30 +33,30 @@ func stdoutScenario(t *testing.T, environment *cli.Environment) {
 
 func fileOutputScenario(t *testing.T, environment *cli.Environment) {
 	t.Helper()
-	commands := []cli.StdoutExpectation{
-		{Command: []string{"sh", "-c", "echo first > /workspace/result.txt"}},
-		{Command: []string{"sh", "-c", "echo second >> /workspace/result.txt"}},
-		{Command: []string{"cat", "/workspace/result.txt"}, Stdout: "first\nsecond\n"},
+	commands := []struct {
+		command cli.Command
+		want    cli.Result
+	}{
+		{command: cli.Command{Args: []string{"sh", "-c", "echo first > /workspace/result.txt"}}, want: cli.Result{ExitCode: 0, Stdout: "", Stderr: ""}},
+		{command: cli.Command{Args: []string{"sh", "-c", "echo second >> /workspace/result.txt"}}, want: cli.Result{ExitCode: 0, Stdout: "", Stderr: ""}},
+		{command: cli.Command{Args: []string{"cat", "/workspace/result.txt"}}, want: cli.Result{ExitCode: 0, Stdout: "first\nsecond\n", Stderr: ""}},
 	}
 	for _, command := range commands {
-		if err := environment.CheckStdout(command); err != nil {
+		if err := environment.CheckCommand(command.command, command.want); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := environment.CheckFile(cli.FileExpectation{
-		Path:    "/workspace/result.txt",
-		Content: []byte("first\nsecond\n"),
-	}); err != nil {
+	if err := environment.CheckFile("/workspace/result.txt", []byte("first\nsecond\n")); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func expectedFailureScenario(t *testing.T, environment *cli.Environment) {
 	t.Helper()
-	if err := environment.CheckStdout(cli.StdoutExpectation{
-		Command:  []string{"sh", "-c", "echo expected-failure; exit 7"},
+	if err := environment.CheckCommand(cli.Command{Args: []string{"sh", "-c", "echo expected-failure; exit 7"}}, cli.Result{
 		ExitCode: 7,
 		Stdout:   "expected-failure\n",
+		Stderr:   "",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -69,24 +69,26 @@ func separatedOutputScenario(t *testing.T, environment *cli.Environment) {
 		WorkingDir: "/workspace",
 		Env:        []string{"HOME=/workspace/synthetic-home"},
 	}
-	if err := environment.CheckCommand(cli.CommandExpectation{
-		Command: command, ExitCode: 7,
-		Stdout: "/workspace/synthetic-home:/workspace\n", Stderr: "diagnostic\n",
-	}); err != nil {
+	want := cli.Result{
+		ExitCode: 7,
+		Stdout:   "/workspace/synthetic-home:/workspace\n",
+		Stderr:   "diagnostic\n",
+	}
+	if err := environment.CheckCommand(command, want); err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := environment.Run(command)
+	result, err := environment.Run(command)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if legacy.ExitCode != 7 || legacy.Stdout != "/workspace/synthetic-home:/workspace\ndiagnostic\n" {
-		t.Fatalf("legacy result=%+v", legacy)
+	if result != want {
+		t.Fatalf("result=%+v want=%+v", result, want)
 	}
 }
 
 func pathAssertionsScenario(t *testing.T, environment *cli.Environment) {
 	t.Helper()
-	if err := environment.WriteFile(cli.File{Path: "/workspace/result.txt", Content: []byte("fixture\n")}); err != nil {
+	if err := environment.WriteFile("/workspace/result.txt", []byte("fixture\n")); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
@@ -94,7 +96,7 @@ func pathAssertionsScenario(t *testing.T, environment *cli.Environment) {
 		{"ln", "-s", "result.txt", "/workspace/link"},
 		{"ln", "-s", "missing.txt", "/workspace/dangling"},
 	} {
-		if err := environment.CheckCommand(cli.CommandExpectation{Command: cli.Command{Args: args}}); err != nil {
+		if err := environment.CheckCommand(cli.Command{Args: args}, cli.Result{ExitCode: 0, Stdout: "", Stderr: ""}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -123,12 +125,12 @@ func pathAssertionsScenario(t *testing.T, environment *cli.Environment) {
 func deadlineScenario(t *testing.T, environment *cli.Environment) {
 	t.Helper()
 	started := time.Now()
-	_, err := environment.Exec([]string{"sleep", "infinity"})
+	_, err := environment.Run(cli.Command{Args: []string{"sleep", "infinity"}})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("sleep error=%v want deadline exceeded", err)
 	}
 	// Allow scheduling overhead around the existing one-minute case deadline.
 	if elapsed := time.Since(started); elapsed > 70*time.Second {
-		t.Fatalf("exec exceeded its case deadline: elapsed=%s", elapsed)
+		t.Fatalf("run exceeded its case deadline: elapsed=%s", elapsed)
 	}
 }

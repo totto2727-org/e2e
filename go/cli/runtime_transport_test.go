@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -14,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
-	tcexec "github.com/testcontainers/testcontainers-go/exec"
 )
 
 func TestExecClient_negotiates_before_cloning_version(t *testing.T) {
@@ -117,7 +116,7 @@ func TestExecClient_preserves_unix_transport(t *testing.T) {
 			defer cancel()
 			result := make(chan error, 1)
 			go func() {
-				_, _, err := execCommand(ctx, executor, "container", []string{"example"}, tcexec.Multiplexed())
+				_, err := runCommand(ctx, executor, "container", Command{Args: []string{"example"}})
 				result <- err
 			}()
 			select {
@@ -167,16 +166,12 @@ func assertTransportExec(t *testing.T, base *client.Client) {
 	executor := transportExecutor(t, base)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	exitCode, output, err := execCommand(ctx, executor, "container", []string{"example"}, tcexec.Multiplexed())
+	result, err := runCommand(ctx, executor, "container", Command{Args: []string{"example"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := io.ReadAll(output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if exitCode != 7 || string(content) != "transport output\n" {
-		t.Fatalf("exit=%d output=%q", exitCode, content)
+	if want := (Result{ExitCode: 7, Stdout: "transport output\n", Stderr: "transport diagnostic\n"}); result != want {
+		t.Fatalf("result=%+v want=%+v", result, want)
 	}
 }
 
@@ -235,11 +230,11 @@ func execTransportHandler(t *testing.T, cancelStream bool) (http.Handler, <-chan
 				}
 				return
 			}
-			output := []byte("transport output\n")
-			var header [8]byte
-			header[0] = 1
-			binary.BigEndian.PutUint32(header[4:], uint32(len(output)))
-			if _, err := connection.Write(append(header[:], output...)); err != nil {
+			if err := writeFrame(connection, stdcopy.Stderr, "transport diagnostic\n"); err != nil {
+				t.Error(err)
+				return
+			}
+			if err := writeFrame(connection, stdcopy.Stdout, "transport output\n"); err != nil {
 				t.Error(err)
 			}
 		default:

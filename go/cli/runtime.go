@@ -5,15 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
-	tcexec "github.com/testcontainers/testcontainers-go/exec"
 )
 
 // dockerRuntime owns exec connections instead of delegating to the upstream
@@ -29,50 +28,46 @@ type dockerExecutor interface {
 	ExecInspect(context.Context, string, client.ExecInspectOptions) (client.ExecInspectResult, error)
 }
 
-func (c *dockerRuntime) Exec(ctx context.Context, args []string, options ...tcexec.ProcessOption) (int, io.Reader, error) {
-	return execCommand(ctx, c.executor, c.GetContainerID(), args, options...)
+func (c *dockerRuntime) Run(ctx context.Context, command Command) (Result, error) {
+	return runCommand(ctx, c.executor, c.GetContainerID(), command)
 }
 
-func execCommand(ctx context.Context, executor dockerExecutor, containerID string, args []string, options ...tcexec.ProcessOption) (int, io.Reader, error) {
-	process := tcexec.NewProcessOptions(args)
-	for _, option := range options {
-		option.Apply(process)
-	}
-	created, err := executor.ExecCreate(ctx, containerID, process.ExecConfig)
+func runCommand(ctx context.Context, executor dockerExecutor, containerID string, command Command) (Result, error) {
+	created, err := executor.ExecCreate(ctx, containerID, client.ExecCreateOptions{
+		Cmd: command.Args, WorkingDir: command.WorkingDir, Env: command.Env,
+		AttachStdout: true, AttachStderr: true,
+	})
 	if err != nil {
-		return 0, nil, fmt.Errorf("create exec: %w", errors.Join(ctx.Err(), err))
+		return Result{}, fmt.Errorf("create exec: %w", errors.Join(ctx.Err(), err))
 	}
 	attached, err := executor.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
 	if err != nil {
-		return 0, nil, fmt.Errorf("attach exec: %w", errors.Join(ctx.Err(), err))
+		return Result{}, fmt.Errorf("attach exec: %w", errors.Join(ctx.Err(), err))
 	}
 	defer attached.Close()
 	stop := context.AfterFunc(ctx, attached.Close)
 	defer stop()
 
-	process.Reader = attached.Reader
-	for _, option := range options {
-		option.Apply(process)
-	}
-	// Buffer before closing the owned connection, even if no output-processing
-	// option was supplied. Never return a reader backed by a closed socket.
-	output, err := io.ReadAll(process.Reader)
+	var stdout, stderr bytes.Buffer
+	_, err = stdcopy.StdCopy(&stdout, &stderr, attached.Reader)
+	result := Result{Stdout: stdout.String(), Stderr: stderr.String()}
 	if err := errors.Join(ctx.Err(), err); err != nil {
-		return 0, nil, fmt.Errorf("read exec output: %w", err)
+		return result, fmt.Errorf("read exec output: %w", err)
 	}
 	for {
 		inspected, err := executor.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
 		if err := errors.Join(ctx.Err(), err); err != nil {
-			return 0, nil, fmt.Errorf("inspect exec: %w", err)
+			return result, fmt.Errorf("inspect exec: %w", err)
 		}
 		if !inspected.Running {
-			return inspected.ExitCode, bytes.NewReader(output), nil
+			result.ExitCode = inspected.ExitCode
+			return result, nil
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return 0, nil, fmt.Errorf("wait for exec: %w", ctx.Err())
+			return result, fmt.Errorf("wait for exec: %w", ctx.Err())
 		case <-timer.C:
 		}
 	}

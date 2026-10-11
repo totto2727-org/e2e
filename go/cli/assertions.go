@@ -2,21 +2,14 @@ package cli
 
 import "fmt"
 
-// CommandExpectation compares a command's exit code and output streams exactly.
-type CommandExpectation struct {
-	Command  Command
-	ExitCode int
-	Stdout   string
-	Stderr   string
-}
-
-func (e *Environment) CheckCommand(expectation CommandExpectation) error {
-	result, err := e.RunSeparated(expectation.Command)
+// CheckCommand compares the exit code and both output streams exactly.
+func (e *Environment) CheckCommand(command Command, want Result) error {
+	result, err := e.Run(command)
 	if err != nil {
 		return err
 	}
-	if result.ExitCode != expectation.ExitCode || result.Stdout != expectation.Stdout || result.Stderr != expectation.Stderr {
-		return fmt.Errorf("command %q: exit_code=%d stdout=%q stderr=%q want_exit_code=%d want_stdout=%q want_stderr=%q", expectation.Command.Args, result.ExitCode, result.Stdout, result.Stderr, expectation.ExitCode, expectation.Stdout, expectation.Stderr)
+	if result != want {
+		return fmt.Errorf("command %q: result=%#v want=%#v", command.Args, result, want)
 	}
 	return nil
 }
@@ -59,7 +52,7 @@ func (e *Environment) CheckSymlink(path, literalTarget string) error {
 	if !linked {
 		return fmt.Errorf("path %q: expected symbolic link", path)
 	}
-	result, err := e.RunSeparated(Command{Args: []string{"readlink", "--", path}})
+	result, err := e.Run(Command{Args: []string{"readlink", "--", path}})
 	if err != nil {
 		return err
 	}
@@ -91,7 +84,7 @@ func (e *Environment) checkPhysicalType(flag, description, path string) error {
 }
 
 func (e *Environment) probePath(flag, path string) (bool, error) {
-	result, err := e.RunSeparated(Command{Args: []string{"test", flag, path}})
+	result, err := e.Run(Command{Args: []string{"test", flag, path}})
 	if err != nil {
 		return false, err
 	}

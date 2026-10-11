@@ -9,7 +9,7 @@ Each scenario receives a fresh container from the caller-built `e2e-example:loca
 
 ### Scope
 
-Check the existing exact-output API.
+Check exact exit status and separate output streams through `CheckCommand`.
 
 ### Commands under test
 
@@ -30,16 +30,17 @@ Check the existing exact-output API.
 
 ### Execution flow
 
-1. Run argv `["echo", "hello from e2e"]` through `CheckStdout`.
+1. Run argv `["echo", "hello from e2e"]` through `CheckCommand(command, want)`, with an expected `cli.Result`.
 
 ### Expected results
 
 - The exit code is `0`.
-- Output is exactly `hello from e2e\n`.
+- Stdout is exactly `hello from e2e\n`.
+- Stderr is exactly empty.
 
 ### Notes
 
-- This case preserves coverage of the existing API.
+- Empty stderr is an intentional exact assertion, not an ignored stream.
 
 ## `fileOutputScenario`
 
@@ -71,17 +72,18 @@ Check a file workflow with multiple commands in one container.
 1. Run argv `["sh", "-c", "echo first > /workspace/result.txt"]`.
 2. Run argv `["sh", "-c", "echo second >> /workspace/result.txt"]`.
 3. Run argv `["cat", "/workspace/result.txt"]`.
-4. Copy the file with `CheckFile` and compare its bytes.
+4. Call `CheckFile("/workspace/result.txt", []byte("first\nsecond\n"))` to copy and compare the file bytes.
 
 ### Expected results
 
 - Every command exits with code `0`.
-- The two write commands produce no output.
-- The read command and copied file contain exactly `first\nsecond\n`.
+- The two write commands produce empty stdout.
+- Every command produces exactly empty stderr.
+- The read command's stdout and the copied file contain exactly `first\nsecond\n`.
 
 ### Notes
 
-- All three commands use the same isolated container.
+- All three commands use `CheckCommand(command, want)` with exact `cli.Result` expectations in the same isolated container.
 
 ## `expectedFailureScenario`
 
@@ -109,12 +111,13 @@ Check that an expected nonzero command result does not fail the scenario.
 
 ### Execution flow
 
-1. Run argv `["sh", "-c", "echo expected-failure; exit 7"]` through `CheckStdout`.
+1. Run argv `["sh", "-c", "echo expected-failure; exit 7"]` through `CheckCommand(command, want)`, expecting exit code `7`.
 
 ### Expected results
 
 - The exit code is `7`.
-- Output is exactly `expected-failure\n`.
+- Stdout is exactly `expected-failure\n`.
+- Stderr is exactly empty.
 
 ### Notes
 
@@ -124,7 +127,7 @@ Check that an expected nonzero command result does not fail the scenario.
 
 ### Scope
 
-Check separate output streams, working directory, environment, and existing output compatibility.
+Check native separate output streams, working directory, and environment through both `CheckCommand` and `Run`.
 
 ### Commands under test
 
@@ -148,17 +151,17 @@ Check separate output streams, working directory, environment, and existing outp
 ### Execution flow
 
 1. Run argv `["sh", "-c", "printf '%s:%s\\n' \"$HOME\" \"$PWD\"; printf 'diagnostic\\n' >&2; exit 7"]` through `CheckCommand`, with working directory `/workspace` and environment entry `HOME=/workspace/synthetic-home`.
-2. Run the same `Command` through the existing `Run` API.
+2. Run the same `Command` through `Run` and check its Go error before comparing the returned `Result` with the same expected value.
 
 ### Expected results
 
-- Both commands return exit code `7`.
-- `CheckCommand` receives stdout `/workspace/synthetic-home:/workspace\n` and stderr `diagnostic\n` separately.
-- The existing `Run` result contains `/workspace/synthetic-home:/workspace\ndiagnostic\n` in `Stdout`.
+- Both executions succeed without a Go error and return exit code `7`.
+- Both `CheckCommand` and `Run` preserve exact stdout `/workspace/synthetic-home:/workspace\n` and stderr `diagnostic\n` separately.
+- The `Run` result equals the complete expected `cli.Result`.
 
 ### Notes
 
-- The existing API retains stdout-followed-by-stderr concatenation.
+- Neither API concatenates stdout and stderr.
 - The test does not require chronological ordering between the streams.
 
 ## `pathAssertionsScenario`
@@ -186,7 +189,7 @@ Check physical path types, absent paths, and literal symbolic-link targets.
 
 ### Preconditions and fixtures
 
-- `WriteFile` creates `/workspace/result.txt` with bytes `fixture\n`.
+- `WriteFile("/workspace/result.txt", []byte("fixture\n"))` creates the file fixture.
 - `/workspace/missing.txt` does not exist.
 
 ### Execution flow
@@ -238,8 +241,8 @@ Check that a command with an open output connection returns when the case deadli
 ### Execution flow
 
 1. Record the command start time.
-2. Run argv `["sleep", "infinity"]` through `Exec`.
-3. Check the returned error with `errors.Is(err, context.DeadlineExceeded)`.
+2. Run argv `["sleep", "infinity"]` through `Run(cli.Command{Args: args})`.
+3. Check the returned error with `errors.Is(err, context.DeadlineExceeded)` without inspecting the unusable exit code.
 4. Check that the elapsed command time is at most 70 seconds.
 5. Return from the callback so the runner can remove the container with a fresh cleanup deadline.
 
@@ -253,5 +256,5 @@ Check that a command with an open output connection returns when the case deadli
 
 - The 70-second assertion allows scheduling overhead around the one-minute case budget.
 - Closing an exec connection does not itself signal the process to exit.
-- Container cleanup stops the remaining process after the callback returns.
+- Container cleanup stops the remaining process after the callback returns, using a fresh 30-second context.
 - This case adds approximately one minute to the Docker-backed test run.

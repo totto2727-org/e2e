@@ -4,29 +4,28 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
-
-	tcexec "github.com/testcontainers/testcontainers-go/exec"
 )
 
 func TestEnvironmentCheckCommand_compares_all_fields_and_applies_options(t *testing.T) {
-	container := &framedContainer{stdout: "out\n", stderr: "err\n", fakeContainer: fakeContainer{exitCode: 7}}
+	container := &fakeContainer{result: Result{ExitCode: 7, Stdout: "out\n", Stderr: "err\n"}}
 	environment := &Environment{ctx: t.Context(), container: container}
-	expectation := CommandExpectation{Command: Command{Args: []string{"example"}, WorkingDir: "/work", Env: []string{"KEY=value"}}, ExitCode: 7, Stdout: "out\n", Stderr: "err\n"}
-	if err := environment.CheckCommand(expectation); err != nil {
+	command := Command{Args: []string{"example"}, WorkingDir: "/work", Env: []string{"KEY=value"}}
+	want := container.result
+	if err := environment.CheckCommand(command, want); err != nil {
 		t.Fatal(err)
 	}
-	if container.config.ExecConfig.WorkingDir != "/work" || strings.Join(container.config.ExecConfig.Env, ",") != "KEY=value" {
-		t.Fatalf("config=%+v", container.config.ExecConfig)
+	if !reflect.DeepEqual(container.command, command) {
+		t.Fatalf("command=%+v want=%+v", container.command, command)
 	}
 	for _, field := range []string{"exit code", "stdout", "stderr"} {
 		t.Run(field, func(t *testing.T) {
-			mismatch := expectation
+			mismatch := want
 			switch field {
 			case "exit code":
 				mismatch.ExitCode = 0
@@ -35,7 +34,7 @@ func TestEnvironmentCheckCommand_compares_all_fields_and_applies_options(t *test
 			case "stderr":
 				mismatch.Stderr = "wrong"
 			}
-			if err := environment.CheckCommand(mismatch); err == nil {
+			if err := environment.CheckCommand(command, mismatch); err == nil {
 				t.Fatal("expected mismatch")
 			}
 		})
@@ -100,9 +99,9 @@ func TestEnvironmentAssertions_reject_infrastructure_failures(t *testing.T) {
 		container runtimeContainer
 		wantCause error
 	}{
-		{name: "transport", container: &fakeContainer{execErr: failure}, wantCause: failure},
-		{name: "invalid test exit", container: &fakeContainer{exitCode: 2}},
-		{name: "missing test utility", container: &fakeContainer{exitCode: 127}},
+		{name: "transport", container: &fakeContainer{runErr: failure}, wantCause: failure},
+		{name: "invalid test exit", container: &fakeContainer{result: Result{ExitCode: 2}}},
+		{name: "missing test utility", container: &fakeContainer{result: Result{ExitCode: 127}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			environment := &Environment{ctx: t.Context(), container: test.container}
@@ -156,39 +155,44 @@ func TestEnvironmentAssertions_reject_second_probe_failure(t *testing.T) {
 
 func TestEnvironmentCheckCommand_preserves_infrastructure_error(t *testing.T) {
 	failure := errors.New("exec failed")
-	environment := &Environment{ctx: t.Context(), container: &fakeContainer{execErr: failure}}
-	if err := environment.CheckCommand(CommandExpectation{Command: Command{Args: []string{"example"}}}); !errors.Is(err, failure) {
+	environment := &Environment{ctx: t.Context(), container: &fakeContainer{runErr: failure}}
+	if err := environment.CheckCommand(Command{Args: []string{"example"}}, Result{}); !errors.Is(err, failure) {
 		t.Fatalf("err=%v want wrapped failure", err)
 	}
 }
 
 type secondProbeFailureContainer struct{ fakeContainer }
 
-func (f *secondProbeFailureContainer) Exec(_ context.Context, args []string, _ ...tcexec.ProcessOption) (int, io.Reader, error) {
+func (f *secondProbeFailureContainer) Run(_ context.Context, command Command) (Result, error) {
 	exitCode := 0
-	switch args[1] {
+	switch command.Args[1] {
 	case "-e":
 		exitCode = 1
 	case "-L":
 		exitCode = 127
 	}
-	return exitCode, strings.NewReader(""), nil
+	return Result{ExitCode: exitCode}, nil
 }
 
 type localCommandContainer struct{ fakeContainer }
 
-func (f *localCommandContainer) Exec(ctx context.Context, args []string, options ...tcexec.ProcessOption) (int, io.Reader, error) {
-	command := exec.CommandContext(ctx, args[0], args[1:]...)
+func (f *localCommandContainer) Run(ctx context.Context, request Command) (Result, error) {
+	command := exec.CommandContext(ctx, request.Args[0], request.Args[1:]...)
+	command.Dir = request.WorkingDir
+	if len(request.Env) > 0 {
+		command.Env = append(os.Environ(), request.Env...)
+	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	err := command.Run()
+	result := Result{Stdout: stdout.String(), Stderr: stderr.String()}
 	var exitError *exec.ExitError
 	if err != nil && !errors.As(err, &exitError) {
-		return 0, nil, err
+		return result, err
 	}
-	framed := &framedContainer{stdout: stdout.String(), stderr: stderr.String(), fakeContainer: fakeContainer{exitCode: command.ProcessState.ExitCode()}}
-	return framed.Exec(ctx, args, options...)
+	result.ExitCode = command.ProcessState.ExitCode()
+	return result, nil
 }
 
 type readlinkFailureContainer struct {
@@ -197,9 +201,9 @@ type readlinkFailureContainer struct {
 	err      error
 }
 
-func (f *readlinkFailureContainer) Exec(_ context.Context, args []string, _ ...tcexec.ProcessOption) (int, io.Reader, error) {
-	if args[0] == "test" {
-		return 0, strings.NewReader(""), nil
+func (f *readlinkFailureContainer) Run(_ context.Context, command Command) (Result, error) {
+	if command.Args[0] == "test" {
+		return Result{}, nil
 	}
-	return f.exitCode, strings.NewReader(""), f.err
+	return Result{ExitCode: f.exitCode}, f.err
 }

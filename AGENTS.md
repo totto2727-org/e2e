@@ -3,64 +3,55 @@
 ## Repository structure
 
 ```text
-cli/      Reusable Testcontainers-based CLI end-to-end test helpers.
-example/  Independent Go module demonstrating the helpers with Docker.
+go/          Go module and independent Docker example module.
+haskell/     Haskell library and Hspec tests.
+typescript/  TypeScript library and Vitest integration.
+rust/        Rust library and asynchronous tests.
 ```
 
-The root Go module owns the reusable package. The example module keeps Docker execution explicit so normal package tests do not require Docker.
+The root README defines the language-independent contract and implementation status.
+Each language README documents its concrete public API and supported Docker transports.
+Keep language-specific implementation details out of the common contract.
 
 ## Development commands
 
-### Execution rules
+- Run root tasks from the repository root.
+- Enter the toolchain with `nix develop` or select a smaller shell with `nix develop .#go`, `.#haskell`, `.#typescript`, or `.#rust`.
+- Use Just for development entry points and language-local Justfiles for implementation-specific commands.
+- `just fix` formats and autofixes supported implementations.
+- `just check` checks formatting and lint findings.
+- `just build` builds each implementation.
+- `just test` runs tests that do not need Docker.
+- `just ci` runs checks, builds, and unit tests without Docker.
+- `just e2e` is the explicit Docker acceptance entry point.
+- Keep Docker tests out of the aggregate `ci` task.
+- Keep temporary outputs under `tmp/` and do not commit them.
 
-- Run commands from the repository root unless a task explicitly targets `example/`.
-- Enter the toolchain environment with `nix develop` before running Just or Go commands.
-- Use Just as the task runner; this repository has no JavaScript workspace.
-- Keep Docker-backed tests behind the explicit `e2e` recipe.
-- Check every returned error and wrap errors with `%w` when adding context.
+## Architecture and invariants
 
-### Standard tasks
+- Resolve a caller-built local image without pulling, then retain its immutable ID with a stopped lease container.
+- Create a fresh container for each uniquely named case and remove all owned containers without deleting the image.
+- Allow at most two concurrent cases per runner and retain the slot through cleanup.
+- Start the one-minute case budget after acquiring a slot and before creating the container.
+- Give cleanup a fresh thirty-second total budget, including retries.
+- Pass literal argv entries and expose separate stdout, stderr, and inspected exit status.
+- Distinguish command failure from Docker, transport, framing, and cancellation errors.
+- Preserve observed partial output when reporting execution errors.
+- Own attached stream connections and close them when the case is cancelled.
+- Compare command results and file bytes exactly.
+- Keep domain-specific workflows in consumer tests rather than the reusable libraries.
+- Do not add compatibility adapters for retired APIs.
+- Do not infer application exit status from a host `docker exec` process.
+- Document transport differences instead of claiming unverified parity.
 
-- `nix develop` — Enter the environment that supplies Go, golangci-lint, and Just.
-- `just fix` — Format and autofix the root and example Go modules with golangci-lint.
-- `just check` — Check formatting and lint findings for both Go modules.
-- `just build` — Build both Go modules.
-- `just test` — Run reusable package tests with the race detector.
-- `just e2e` — Run the Docker E2E example with verbose output.
-- `just ci`: Run checks, builds, and reusable tests in sequence without Docker E2E.
+## Language-specific rules
 
-## Architecture
-
-### Reusable package
-
-- `cli.Run` resolves a prebuilt image from the local daemon without pulling, then creates and cleans a fresh container for each `cli.Case`.
-- A temporary stopped container retains the resolved image ID until every case completes; cleanup removes that lease, not the image.
-- `cli.Environment` owns the command and file assertion primitives used inside a case.
-- At most two cases run concurrently; each case has a bounded context.
-
-### Example module
-
-- `example/` is a separate Go module that replaces the root module with the local checkout.
-- `example/Dockerfile` supplies the image used by the opt-in Docker scenarios.
-- Multi-command and domain-specific workflows stay in the example or consumer test, not in the reusable package.
-
-## Development tools
-
-- **Go 1.25**: Builds and tests both modules.
-- **Docker CLI**: Builds the example image before the Go test starts.
-- **Testcontainers for Go**: Manages isolated Docker containers for each case.
-- **golangci-lint**: Formats and lints Go code.
-- **Just**: Runs repository development tasks.
-- **Nix**: Provides the Go, golangci-lint, and Just development shell.
-
-## Package-specific rules
-
-- Keep the reusable root module independent from the example module's local `replace` directive.
-- Keep Docker-backed scenarios opt-in through `just e2e`; unit and race tests must not require a Docker daemon.
-- Pass command arguments as argv entries and compare caller-visible exit codes, stdout, or copied file content explicitly.
-- Preserve bounded build and command contexts plus the two-case concurrency limit unless a measured requirement justifies changing them.
-- Use `$implement-cli-e2e` when implementing or refactoring consumer Go/Testcontainers CLI scenarios.
-- Apply `$document-e2e-scenarios` to every scenario-bearing Go test file covered by that workflow; the sibling English Markdown and validator result are required parts of the change.
-- Run `just ci` inside `nix develop` before handoff. Run `just e2e` separately only when Docker E2E is explicitly requested.
-
-_This AGENTS.md was generated from the [share-artifact skill](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/SKILL.md) and [AGENTS template](https://raw.githubusercontent.com/totto2727-org/agent/refs/heads/main/plugins/totto2727-coding/skills/share-artifact/agents/template.md)._
+- Go code lives in the `github.com/totto2727-org/e2e/go` module.
+- The independent `go/example` module uses a local `replace` only for development.
+- Check every Go error and use `%w` when adding context.
+- Run Go tests with the race detector.
+- Apply the `implement-cli-e2e` and `document-e2e-scenarios` skills to consumer Go scenarios.
+- Keep sibling English scenario documents and validate them when changing scenario-bearing Go tests.
+- TypeScript uses Node, pnpm with its authoritative lockfile, release-age safeguards, and Vitest integration.
+- Keep native unit tests independent of Docker in every language.
+- Before handoff, run the affected language tasks and the corresponding real Docker acceptance task when Docker validation is requested.

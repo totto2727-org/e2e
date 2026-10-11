@@ -3,23 +3,23 @@ package cli
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
-	tcexec "github.com/testcontainers/testcontainers-go/exec"
 )
 
-func TestExecCommand_preserves_options_output_and_exit_code(t *testing.T) {
+func TestRunCommand_preserves_options_output_and_exit_code(t *testing.T) {
 	connection, peer := net.Pipe()
 	t.Cleanup(func() { closeTestConnection(t, connection) })
 	t.Cleanup(func() { closeTestConnection(t, peer) })
@@ -27,40 +27,34 @@ func TestExecCommand_preserves_options_output_and_exit_code(t *testing.T) {
 	go func() {
 		var err error
 		for _, frame := range []struct {
-			stream byte
+			stream stdcopy.StdType
 			text   string
 		}{{2, "diagnostic\n"}, {1, "result\n"}} {
-			var header [8]byte
-			header[0] = frame.stream
-			binary.BigEndian.PutUint32(header[4:], uint32(len(frame.text)))
-			if _, err = peer.Write(append(header[:], []byte(frame.text)...)); err != nil {
+			if err = writeFrame(peer, frame.stream, frame.text); err != nil {
 				break
 			}
 		}
 		written <- errors.Join(err, peer.Close())
 	}()
 	executor := &fakeExecutor{connection: connection, exitCode: 7}
-	exitCode, output, err := execCommand(t.Context(), executor, "container", []string{"example", "arg with spaces"},
-		tcexec.Multiplexed(), tcexec.WithWorkingDir("/project"), tcexec.WithEnv([]string{"HOME=/home"}))
+	command := Command{Args: []string{"example", "arg with spaces"}, WorkingDir: "/project", Env: []string{"HOME=/home", "BARE"}}
+	result, err := runCommand(t.Context(), executor, "container", command)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := <-written; err != nil {
 		t.Fatal(err)
 	}
-	content, err := io.ReadAll(output)
-	if err != nil {
-		t.Fatal(err)
+	if want := (Result{ExitCode: 7, Stdout: "result\n", Stderr: "diagnostic\n"}); result != want {
+		t.Fatalf("result=%+v want=%+v", result, want)
 	}
-	if exitCode != 7 || string(content) != "result\ndiagnostic\n" {
-		t.Fatalf("exit=%d output=%q", exitCode, content)
-	}
-	if strings.Join(executor.options.Cmd, "|") != "example|arg with spaces" || executor.options.WorkingDir != "/project" || strings.Join(executor.options.Env, "|") != "HOME=/home" {
-		t.Fatalf("options=%+v", executor.options)
+	wantOptions := client.ExecCreateOptions{Cmd: command.Args, WorkingDir: command.WorkingDir, Env: command.Env, AttachStdout: true, AttachStderr: true}
+	if !reflect.DeepEqual(executor.options, wantOptions) {
+		t.Fatalf("options=%+v want=%+v", executor.options, wantOptions)
 	}
 }
 
-func TestExecCommand_deadline_closes_open_output(t *testing.T) {
+func TestRunCommand_deadline_closes_open_output(t *testing.T) {
 	connection, peer := net.Pipe()
 	t.Cleanup(func() { closeTestConnection(t, connection) })
 	t.Cleanup(func() { closeTestConnection(t, peer) })
@@ -68,7 +62,7 @@ func TestExecCommand_deadline_closes_open_output(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		_, _, err := execCommand(ctx, &fakeExecutor{connection: connection}, "container", []string{"sleep", "infinity"}, tcexec.Multiplexed())
+		_, err := runCommand(ctx, &fakeExecutor{connection: connection}, "container", Command{Args: []string{"sleep", "infinity"}})
 		result <- err
 	}()
 	select {
@@ -84,24 +78,82 @@ func TestExecCommand_deadline_closes_open_output(t *testing.T) {
 	}
 }
 
-func TestExecCommand_cancellation_interrupts_exit_polling(t *testing.T) {
+func TestRunCommand_cancellation_interrupts_exit_polling(t *testing.T) {
 	connection, peer := net.Pipe()
 	t.Cleanup(func() { closeTestConnection(t, connection) })
 	closeTestConnection(t, peer)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	executor := &fakeExecutor{connection: connection, running: true, onInspect: cancel}
-	_, _, err := execCommand(ctx, executor, "container", []string{"example"}, tcexec.Multiplexed())
+	_, err := runCommand(ctx, executor, "container", Command{Args: []string{"example"}})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error=%v", err)
 	}
 }
 
-func TestExecCommand_preserves_create_failure(t *testing.T) {
+func TestRunCommand_preserves_create_failure(t *testing.T) {
 	cause := errors.New("create rejected")
-	_, _, err := execCommand(t.Context(), &fakeExecutor{createErr: cause}, "container", []string{"example"})
+	_, err := runCommand(t.Context(), &fakeExecutor{createErr: cause}, "container", Command{Args: []string{"example"}})
 	if !errors.Is(err, cause) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestRunCommand_malformed_stream_preserves_observed_output(t *testing.T) {
+	connection, peer := net.Pipe()
+	t.Cleanup(func() { closeTestConnection(t, connection) })
+	t.Cleanup(func() { closeTestConnection(t, peer) })
+	written := make(chan error, 1)
+	go func() {
+		var err error
+		for _, frame := range []struct {
+			stream stdcopy.StdType
+			text   string
+		}{{stdcopy.Stdout, "observed out\n"}, {stdcopy.Stderr, "observed err\n"}, {9, ""}} {
+			if err = writeFrame(peer, frame.stream, frame.text); err != nil {
+				break
+			}
+		}
+		written <- errors.Join(err, peer.Close())
+	}()
+
+	result, err := runCommand(t.Context(), &fakeExecutor{connection: connection}, "container", Command{Args: []string{"example"}})
+	if err == nil || !strings.Contains(err.Error(), "unrecognized stream: 9") {
+		t.Fatalf("error=%v want malformed stream rejection", err)
+	}
+	if want := (Result{Stdout: "observed out\n", Stderr: "observed err\n"}); result != want {
+		t.Fatalf("result=%+v want=%+v", result, want)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunCommand_cancellation_preserves_output_during_exit_polling(t *testing.T) {
+	connection, peer := net.Pipe()
+	t.Cleanup(func() { closeTestConnection(t, connection) })
+	t.Cleanup(func() { closeTestConnection(t, peer) })
+	written := make(chan error, 1)
+	go func() {
+		err := writeFrame(peer, stdcopy.Stdout, "observed out\n")
+		if err == nil {
+			err = writeFrame(peer, stdcopy.Stderr, "observed err\n")
+		}
+		written <- errors.Join(err, peer.Close())
+	}()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	executor := &fakeExecutor{connection: connection, running: true, onInspect: cancel}
+
+	result, err := runCommand(ctx, executor, "container", Command{Args: []string{"example"}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v want cancellation", err)
+	}
+	if want := (Result{Stdout: "observed out\n", Stderr: "observed err\n"}); result != want {
+		t.Fatalf("result=%+v want=%+v", result, want)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -182,7 +234,7 @@ func TestExecClient_cancels_stalled_upgrade_and_stream(t *testing.T) {
 			defer cancel()
 			result := make(chan error, 1)
 			go func() {
-				_, _, err := execCommand(ctx, executor, "container", []string{"sleep", "infinity"}, tcexec.Multiplexed())
+				_, err := runCommand(ctx, executor, "container", Command{Args: []string{"sleep", "infinity"}})
 				result <- err
 			}()
 			select {

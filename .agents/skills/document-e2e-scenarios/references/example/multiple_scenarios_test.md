@@ -28,7 +28,7 @@ Verify that the CLI image can print a caller-visible greeting successfully.
 ### Execution flow
 
 1. Run `echo "hello from e2e"`, passing the greeting as one argv entry after `echo`.
-2. Capture the exit status and standard output.
+2. Use `CheckCommand(command, want)` to compare exit status, stdout, and stderr with an exact `cli.Result`.
 
 ### Expected results
 
@@ -36,6 +36,7 @@ Verify that the CLI image can print a caller-visible greeting successfully.
 | --- | --- |
 | Exit status | `0` |
 | Standard output | Exactly `hello from e2e\n` |
+| Standard error | Exactly empty |
 | Persisted state | No state is persisted. |
 | Filesystem | No files are created or changed. |
 
@@ -69,7 +70,7 @@ Verify that an expected nonzero CLI result remains observable without failing th
 ### Execution flow
 
 1. Run `false` without arguments.
-2. Capture the exit status and standard output.
+2. Use `CheckCommand(command, want)` to compare exit status, stdout, and stderr with an exact `cli.Result`.
 
 ### Expected results
 
@@ -77,6 +78,7 @@ Verify that an expected nonzero CLI result remains observable without failing th
 | --- | --- |
 | Exit status | `1` |
 | Standard output | Empty |
+| Standard error | Exactly empty |
 | Persisted state | No state is persisted. |
 | Filesystem | No files are created or changed. |
 
