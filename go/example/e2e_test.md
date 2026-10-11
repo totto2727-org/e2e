@@ -54,16 +54,20 @@ Check a file workflow with multiple commands in one container.
 | --- | --- |
 | `sh` | Write and append file content. |
 | `cat` | Read the completed file. |
+| `stat` | Read the binary file permission bits. |
 
 ### Arguments and options
 
 | Argument or option | Purpose |
 | --- | --- |
-| `-c` | Execute the fixture script. |
-| `/workspace/result.txt` | Select the fixture file. |
+| `-c` | Execute the fixture script or select the `stat` output format. |
+| `%a` | Print the file permission bits in octal. |
+| `/workspace/result.txt` | Select the text fixture file. |
+| `/workspace/binary.bin` | Select the binary fixture file. |
 
 ### Preconditions and fixtures
 
+- The image contains `sh`, `cat`, and GNU `stat`.
 - `/workspace` exists in the image.
 - The scenario starts without the result file.
 
@@ -73,6 +77,8 @@ Check a file workflow with multiple commands in one container.
 2. Run argv `["sh", "-c", "echo second >> /workspace/result.txt"]`.
 3. Run argv `["cat", "/workspace/result.txt"]`.
 4. Call `CheckFile("/workspace/result.txt", []byte("first\nsecond\n"))` to copy and compare the file bytes.
+5. Write bytes `00 ff 0a` to `/workspace/binary.bin` through `WriteFile`, then compare them through `CheckFile`.
+6. Run argv `["stat", "-c", "%a", "/workspace/binary.bin"]` through `CheckCommand`.
 
 ### Expected results
 
@@ -80,10 +86,12 @@ Check a file workflow with multiple commands in one container.
 - The two write commands produce empty stdout.
 - Every command produces exactly empty stderr.
 - The read command's stdout and the copied file contain exactly `first\nsecond\n`.
+- The binary file preserves NUL, the non-UTF-8 byte `ff`, and a newline exactly.
+- The permission command returns exactly `644\n` on stdout, empty stderr, and exit code `0`.
 
 ### Notes
 
-- All three commands use `CheckCommand(command, want)` with exact `cli.Result` expectations in the same isolated container.
+- All four commands use `CheckCommand(command, want)` with exact `cli.Result` expectations in the same isolated container.
 
 ## `expectedFailureScenario`
 
@@ -197,10 +205,11 @@ Check physical path types, absent paths, and literal symbolic-link targets.
 1. Run argv `["mkdir", "/workspace/directory"]`.
 2. Run argv `["ln", "-s", "result.txt", "/workspace/link"]`.
 3. Run argv `["ln", "-s", "missing.txt", "/workspace/dangling"]`.
-4. Check the regular file, directory, missing target, and literal targets `result.txt` and `missing.txt`.
-5. Confirm that `CheckMissing` rejects `/workspace/dangling`.
-6. Confirm that `CheckRegularFile` rejects `/workspace/link`.
-7. Confirm that `CheckSymlink` rejects `/workspace/result.txt` as the expected literal target of `/workspace/link`.
+4. Run argv `["ln", "-s", "directory", "/workspace/directory-link"]`.
+5. Check the regular file, directory, missing target, and literal targets `result.txt` and `missing.txt`.
+6. Confirm that `CheckMissing` rejects `/workspace/dangling`.
+7. Confirm that `CheckRegularFile` rejects `/workspace/link` and `CheckDirectory` rejects `/workspace/directory-link`.
+8. Confirm that `CheckSymlink` rejects `/workspace/result.txt` as the expected literal target of `/workspace/link`.
 
 ### Expected results
 
@@ -208,6 +217,7 @@ Check physical path types, absent paths, and literal symbolic-link targets.
 - The positive path assertions succeed.
 - A dangling link is not treated as an absent path.
 - A symbolic link to a regular file is not treated as a physical regular file.
+- A symbolic link to a directory is not treated as a physical directory.
 - An absolute resolved target is not accepted in place of the relative literal target.
 
 ### Notes

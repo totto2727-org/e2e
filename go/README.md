@@ -76,9 +76,14 @@ Use an explicit shell executable only when the command itself requires shell syn
 
 Stdout and stderr remain separate, with ordering preserved within each stream, not between streams.
 They are never implicitly concatenated.
+Go strings retain stream bytes without UTF-8 validation.
 A nonzero command exit code is a result, not a Go error.
 On transport or cancellation errors, the returned result retains any captured partial stdout and stderr, but `ExitCode` is not usable when `err != nil`.
 Always check the error before interpreting the exit code.
+
+Go delegates stream demultiplexing to Moby's `StdCopy`.
+That upstream decoder accepts EOF inside an unfinished frame, so malformed-stream detection is not exhaustive.
+Cancellation still returns a context error; the partial result contains bytes already delivered by the decoder.
 
 ```go
 result, err := environment.Run(cli.Command{

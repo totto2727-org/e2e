@@ -49,6 +49,16 @@ func fileOutputScenario(t *testing.T, environment *cli.Environment) {
 	if err := environment.CheckFile("/workspace/result.txt", []byte("first\nsecond\n")); err != nil {
 		t.Fatal(err)
 	}
+	binary := []byte{0, 255, '\n'}
+	if err := environment.WriteFile("/workspace/binary.bin", binary); err != nil {
+		t.Fatal(err)
+	}
+	if err := environment.CheckFile("/workspace/binary.bin", binary); err != nil {
+		t.Fatal(err)
+	}
+	if err := environment.CheckCommand(cli.Command{Args: []string{"stat", "-c", "%a", "/workspace/binary.bin"}}, cli.Result{ExitCode: 0, Stdout: "644\n"}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func expectedFailureScenario(t *testing.T, environment *cli.Environment) {
@@ -95,6 +105,7 @@ func pathAssertionsScenario(t *testing.T, environment *cli.Environment) {
 		{"mkdir", "/workspace/directory"},
 		{"ln", "-s", "result.txt", "/workspace/link"},
 		{"ln", "-s", "missing.txt", "/workspace/dangling"},
+		{"ln", "-s", "directory", "/workspace/directory-link"},
 	} {
 		if err := environment.CheckCommand(cli.Command{Args: args}, cli.Result{ExitCode: 0, Stdout: "", Stderr: ""}); err != nil {
 			t.Fatal(err)
@@ -116,6 +127,9 @@ func pathAssertionsScenario(t *testing.T, environment *cli.Environment) {
 	}
 	if err := environment.CheckRegularFile("/workspace/link"); err == nil {
 		t.Fatal("symbolic link was treated as a physical regular file")
+	}
+	if err := environment.CheckDirectory("/workspace/directory-link"); err == nil {
+		t.Fatal("symbolic link was treated as a physical directory")
 	}
 	if err := environment.CheckSymlink("/workspace/link", "/workspace/result.txt"); err == nil {
 		t.Fatal("resolved target was accepted instead of the literal target")
