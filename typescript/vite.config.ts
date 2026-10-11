@@ -21,7 +21,7 @@ export default defineConfig({
       fix: { command: 'vp check --fix' },
       build: { command: 'vp pack' },
       test: { command: 'vp test run' },
-      e2e: { command: 'E2E_DOCKER=1 vp test run' },
+      e2e: { command: 'E2E_DOCKER=1 vp test run', cache: false },
     },
   },
 })

@@ -113,6 +113,7 @@ nix develop .#typescript -c just --justfile typescript/Justfile e2e
 
 Normal tests use controlled HTTP servers and do not require Docker.
 The explicit [Docker tests](test/docker.test.ts) register the six shared cases separately and verify distinct identities, exact file bytes/mode, removal of scenario and lease containers, and preservation of the caller-owned image.
+The `e2e` task disables Vite+ task caching so every invocation observes the current Docker daemon rather than replaying earlier success output.
 The deadline case takes approximately one minute.
 
 ## Validation status
