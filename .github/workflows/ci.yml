@@ -12,10 +12,14 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [go, haskell, typescript, rust]
     steps:
       - uses: actions/checkout@v7
       - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
-      - name: Verify Go modules
+      - name: Verify ${{ matrix.language }} implementation
         run: |
-          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#default")"
-          just ci
+          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#${{ matrix.language }}")"
+          just ${{ matrix.language }}/ci

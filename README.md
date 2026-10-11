@@ -13,26 +13,37 @@ A container is not a shell abstraction: commands are argv entries, and shell syn
 
 ## Implementations
 
-| Language | Implementation and API | Framework | Status |
-| --- | --- | --- | --- |
-| Go | [go/README.md](./go/README.md) | `testing` | API simplified; integration validation in progress. |
-| Haskell | [haskell/README.md](./haskell/README.md) | Hspec | Planned. |
-| TypeScript | [typescript/README.md](./typescript/README.md) | Vitest | Planned. |
-| Rust | [rust/README.md](./rust/README.md) | Tokio tests | Planned. |
+| Language | Implementation and API | Framework | Shared API | Native checks | Docker acceptance |
+| --- | --- | --- | --- | --- | --- |
+| Go | [go/README.md](./go/README.md) | `testing` | Implemented. | Passed, including race tests. | Six common cases passed. |
+| Haskell | [haskell/README.md](./haskell/README.md) | Hspec outcomes | Implemented. | Passed, including a Cabal library build. | Six common cases passed. |
+| TypeScript | [typescript/README.md](./typescript/README.md) | Vitest | Implemented. | Passed, including built package imports. | Six common cases passed. |
+| Rust | [rust/README.md](./rust/README.md) | Tokio tests | Implemented. | Passed, including Clippy and rustdoc. | Six common cases passed. |
 
-Status must distinguish implementation, native checks, and real Docker acceptance. A mocked transport test is not Docker acceptance.
+Each shared API includes command execution, exact assertions, byte file transfer, physical path checks, isolated cases, deadlines, and owned-resource cleanup.
+Docker acceptance uses a local Linux-container Engine over a Unix socket and verifies cleanup and image preservation. A controlled transport test is not Docker acceptance.
 No package publication or release is implied by this table.
+
+| Language | Backend | Additional connection behavior |
+| --- | --- | --- |
+| Go | Testcontainers and the native Moby exec API. | Testcontainers configuration and negotiated or explicit API versions. Configured TLS has a native transport regression test; initial TLS dialing follows the upstream dialer. |
+| Haskell | Native Engine HTTP through `http-client`. | Unix sockets and HTTP/TCP endpoints. Unversioned Engine endpoints; explicit API-version overrides and TLS are rejected. |
+| TypeScript | Native Engine HTTP through Node. | Unix sockets and HTTP/TCP endpoints. Unversioned Engine endpoints; explicit API-version overrides and TLS are rejected. |
+| Rust | Bollard. | Unix sockets and HTTP/TCP endpoints with API negotiation. Explicit API-version overrides and TLS are rejected. |
+
+Connection support is not a claim that every transport has passed real-daemon acceptance.
+Use the language READMEs for cancellation boundaries, non-UTF-8 handling, and concrete argument types.
 
 ## Shared values
 
 - **Case**: a unique name and an action that receives an isolated environment.
 - **Command**: nonempty argv with a nonempty executable, an optional working directory, and optional environment entries. Preserve argument boundaries, empty argument values, and environment values. Reject NUL in argv, working directory, and environment entries before execution.
-- **Result**: exit code, stdout, and stderr. Keep both output streams separate and unchanged. Preserve ordering within each stream, but do not promise ordering between streams. Acceptance examples use UTF-8 text; file APIs transfer exact bytes.
+- **Result**: exit code, stdout, and stderr. Keep both output streams separate and preserve valid UTF-8 command text unchanged. Preserve ordering within each stream, but do not promise ordering between streams. Languages may expose text or bytes; their READMEs define non-UTF-8 handling. File APIs always transfer exact bytes.
 - **Environment**: the case-owned command and file operations. Do not expose a mutable Docker client as a public escape hatch.
 
 A nonzero application exit code is a command result, not an infrastructure error.
 Daemon failures, failure to attach, output decode errors, cancellation, and deadline expiry are errors. An exit code is valid only after successful execution and inspection.
-Execution errors retain output already captured when the language API can carry it. Each language README explains that error representation.
+Command results and execution errors delivered by the command API retain output already captured. Cancelling or abandoning the whole runner may instead propagate framework cancellation without delivering a command outcome. Each language README explains that boundary and its error representation.
 Never infer application exit status solely from the host `docker exec` process: its failure can instead be a Docker error.
 
 ## Shared operations
@@ -100,6 +111,16 @@ Keep Docker execution behind an explicit E2E task. Normal build and unit-test ta
 `go/`, `haskell/`, `typescript/`, and `rust/` contain independently usable libraries and their language-specific API documentation.
 The root Justfile is the shared entrypoint for checks and explicit Docker acceptance.
 See [AGENTS.md](./AGENTS.md) for contributor instructions and the language READMEs for concrete commands.
+
+```sh
+nix develop -c just ci
+nix develop -c just e2e
+```
+
+`ci` runs all language checks, builds, and native tests without Docker.
+`e2e` first builds the shared image through the Go example task, then runs each language's acceptance task in sequence.
+For one implementation, use a named shell and language task, such as `nix develop .#rust -c just rust/ci`.
+Standalone language E2E tasks other than Go require the caller to build `e2e-example:local` first.
 
 ## License
 

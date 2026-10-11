@@ -29,8 +29,8 @@
           rustTools = [ pkgs.cargo pkgs.rustc pkgs.rustfmt pkgs.clippy ];
           haskellTools = [
             (pkgs.haskellPackages.ghcWithPackages (p: with p; [
-              aeson async bytestring containers directory filepath hspec
-              http-client http-types network random tar text time
+              aeson async bytestring containers filepath hspec
+              http-client http-types network tar text
             ]))
             pkgs.cabal-install
           ];
