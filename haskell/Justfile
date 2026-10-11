@@ -1,0 +1,26 @@
+default:
+    @just --list
+
+# Use the root Nix shell before these recipes.
+check:
+    mkdir -p tmp/check-native tmp/check-e2e
+    ghc -XHaskell2010 -Wall -Wcompat -Werror -fno-code -isrc -itest -outputdir tmp/check-native test/Spec.hs
+    ghc -XHaskell2010 -Wall -Wcompat -Werror -fno-code -isrc -outputdir tmp/check-e2e e2e/Spec.hs
+    # This checkout declares neither a license nor a release maintainer.
+    cabal check --ignore=license-none --ignore=no-maintainer
+
+build:
+    cabal build --offline --builddir=tmp/cabal lib:cli-e2e --ghc-options=-Werror
+
+test:
+    mkdir -p tmp/native
+    ghc -XHaskell2010 -Wall -Wcompat -Werror -threaded -isrc -itest -outputdir tmp/native test/Spec.hs -o tmp/native/spec
+    tmp/native/spec
+
+# The caller must build e2e-example:local before this explicit task.
+e2e:
+    mkdir -p tmp/e2e
+    ghc -XHaskell2010 -Wall -Wcompat -Werror -threaded -isrc -outputdir tmp/e2e e2e/Spec.hs -o tmp/e2e/spec
+    tmp/e2e/spec
+
+ci: check build test
