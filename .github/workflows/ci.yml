@@ -12,14 +12,11 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [go, haskell, typescript, rust]
     steps:
       - uses: actions/checkout@v7
       - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
-      - name: Verify ${{ matrix.language }} implementation
+      - name: Verify workspace task graph
         run: |
-          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#${{ matrix.language }}")"
-          just ${{ matrix.language }}/ci
+          eval "$(nix print-dev-env "$GITHUB_WORKSPACE")"
+          vp install --frozen-lockfile
+          vp run ci

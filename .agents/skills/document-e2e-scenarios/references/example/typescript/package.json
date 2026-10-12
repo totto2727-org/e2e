@@ -1,0 +1,11 @@
+{
+  "name": "@totto2727/e2e-doc-examples",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@totto2727/e2e-cli": "workspace:*",
+    "typescript": "^7.0.2",
+    "vite-plus": "catalog:"
+  }
+}

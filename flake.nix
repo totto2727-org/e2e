@@ -1,11 +1,18 @@
 {
   description = "Cross-language CLI end-to-end test libraries";
 
-  inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1";
+  inputs = {
+    nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1";
+    vite-plus-overlay = {
+      url = "github:ryoppippi/nix-vite-plus";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
   outputs =
     {
       nixpkgs,
+      vite-plus-overlay,
       ...
     }:
     let
@@ -22,16 +29,43 @@
         let
           pkgs = import nixpkgs {
             inherit system;
+            overlays = [ vite-plus-overlay.overlays.default ];
           };
-          common = [ pkgs.just ];
-          goTools = [ pkgs.go pkgs.golangci-lint ];
-          typescriptTools = [ pkgs.nodejs_24 pkgs.pnpm ];
-          rustTools = [ pkgs.cargo pkgs.rustc pkgs.rustfmt pkgs.clippy ];
+          common = [
+            pkgs.just
+            pkgs.nixfmt
+          ];
+          goTools = [
+            pkgs.go
+            pkgs.golangci-lint
+          ];
+          typescriptTools = [
+            pkgs.nodejs_24
+            pkgs.pnpm
+            pkgs.vite-plus
+          ];
+          rustTools = [
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.rustfmt
+            pkgs.clippy
+          ];
           haskellTools = [
-            (pkgs.haskellPackages.ghcWithPackages (p: with p; [
-              aeson async bytestring containers filepath hspec
-              http-client http-types network tar text
-            ]))
+            (pkgs.haskellPackages.ghcWithPackages (
+              p: with p; [
+                aeson
+                async
+                bytestring
+                containers
+                filepath
+                hspec
+                http-client
+                http-types
+                network
+                tar
+                text
+              ]
+            ))
             pkgs.cabal-install
           ];
         in

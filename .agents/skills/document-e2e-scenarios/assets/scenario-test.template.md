@@ -10,15 +10,15 @@ Explain the single user-visible behavior covered by this scenario.
 
 ### Commands under test
 
-| Command path | Purpose |
-| --- | --- |
+| Command path        | Purpose                                                    |
+| ------------------- | ---------------------------------------------------------- |
 | `my-cli subcommand` | Describe the behavior exercised through this command path. |
 
 ### Arguments and options
 
-| Argument or option | Purpose |
-| --- | --- |
-| `--example` | Explain the tested meaning. |
+| Argument or option | Purpose                     |
+| ------------------ | --------------------------- |
+| `--example`        | Explain the tested meaning. |
 
 ### Preconditions and fixtures
 
@@ -32,12 +32,12 @@ Explain the single user-visible behavior covered by this scenario.
 
 ### Expected results
 
-| Observation | Expected result |
-| --- | --- |
-| Exit status | State the expected code or success/failure condition. |
-| Standard output | Quote exact output or the invariant substring asserted by the test. |
-| Persisted state | Describe configuration and state-file expectations. |
-| Filesystem | Describe created, preserved, replaced, or removed paths and symlink targets. |
+| Observation     | Expected result                                                              |
+| --------------- | ---------------------------------------------------------------------------- |
+| Exit status     | State the expected code or success/failure condition.                        |
+| Standard output | Quote exact output or the invariant substring asserted by the test.          |
+| Persisted state | Describe configuration and state-file expectations.                          |
+| Filesystem      | Describe created, preserved, replaced, or removed paths and symlink targets. |
 
 ### Notes
 

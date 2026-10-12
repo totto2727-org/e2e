@@ -1,10 +1,13 @@
 use super::*;
 
+pub(super) type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[test]
-fn argv_boundaries_and_empty_values_are_preserved() {
+fn argv_boundaries_and_empty_values_are_preserved() -> TestResult {
     let cmd = Command::new(["printf", "%s", "", "two words", "'literal'"]);
-    cmd.validate().unwrap();
+    cmd.validate()?;
     assert_eq!(cmd.args, ["printf", "%s", "", "two words", "'literal'"]);
+    Ok(())
 }
 #[test]
 fn invalid_fields_are_rejected() {
@@ -26,13 +29,13 @@ fn invalid_fields_are_rejected() {
     assert!(matches!(path_valid("\0"), Err(Error::InvalidInput(_))));
 }
 #[test]
-fn every_command_field_is_compared_exactly() {
+fn every_command_field_is_compared_exactly() -> TestResult {
     let expected = CommandResult {
         exit_code: 7,
         stdout: vec![0, 255],
         stderr: vec![],
     };
-    compare_command(expected.clone(), expected.clone()).unwrap();
+    compare_command(&expected, &expected)?;
     for actual in [
         CommandResult {
             exit_code: 0,
@@ -48,13 +51,14 @@ fn every_command_field_is_compared_exactly() {
         },
     ] {
         assert!(matches!(
-            compare_command(actual, expected.clone()),
+            compare_command(&actual, &expected),
             Err(Error::Assertion(_))
         ));
     }
+    Ok(())
 }
 #[test]
-fn chunks_preserve_binary_bytes_and_stream_order() {
+fn chunks_preserve_binary_bytes_and_stream_order() -> TestResult {
     let mut output = PartialOutput::default();
     for chunk in [
         LogOutput::StdOut {
@@ -67,7 +71,7 @@ fn chunks_preserve_binary_bytes_and_stream_order() {
             message: b"next".as_slice().into(),
         },
     ] {
-        append_output(&mut output, chunk).unwrap();
+        append_output(&mut output, chunk)?;
     }
     assert_eq!(
         output,
@@ -85,16 +89,21 @@ fn chunks_preserve_binary_bytes_and_stream_order() {
         ),
         Err(Error::Unsupported(_))
     ));
+    Ok(())
 }
 #[test]
-fn archive_preserves_bytes_and_mode() {
+fn archive_preserves_bytes_and_mode() -> TestResult {
     let payload = [0, 1, 255, b'\n'];
-    let bytes = file_archive(std::ffi::OsStr::new("fixture"), &payload).unwrap();
-    assert_eq!(read_archive(&bytes).unwrap(), payload);
+    let bytes = file_archive(std::ffi::OsStr::new("fixture"), &payload)?;
+    assert_eq!(read_archive(&bytes)?, payload);
     let mut archive = tar::Archive::new(bytes.as_slice());
-    let entry = archive.entries().unwrap().next().unwrap().unwrap();
-    assert_eq!(entry.header().mode().unwrap(), 0o644);
-    assert_eq!(entry.path().unwrap(), Path::new("fixture"));
+    let entry = archive
+        .entries()?
+        .next()
+        .ok_or("expected archive entry")??;
+    assert_eq!(entry.header().mode()?, 0o644);
+    assert_eq!(entry.path()?, Path::new("fixture"));
+    Ok(())
 }
 #[test]
 fn prior_error_and_cleanup_error_are_both_retained() {
@@ -109,23 +118,23 @@ fn prior_error_and_cleanup_error_are_both_retained() {
     assert!(matches!(errors[0], Error::Cancelled));
     assert!(matches!(errors[1], Error::Cleanup { .. }));
 }
-fn environment(deadline: Instant) -> Environment {
-    Environment {
-        docker: Docker::connect_with_http("http://127.0.0.1:1", 60, API_DEFAULT_VERSION).unwrap(),
+fn environment(deadline: Instant) -> TestResult<Environment> {
+    Ok(Environment {
+        docker: Docker::connect_with_http("http://127.0.0.1:1", 60, API_DEFAULT_VERSION)?,
         id: "not-used".into(),
         deadline,
         cancel: CancellationToken::new(),
-    }
+    })
 }
 #[tokio::test(start_paused = true)]
-async fn deadline_drops_owned_pending_operation() {
-    let env = environment(Instant::now() + CASE_BUDGET);
+async fn deadline_drops_owned_pending_operation() -> TestResult {
     struct Dropped(Arc<std::sync::atomic::AtomicBool>);
     impl Drop for Dropped {
         fn drop(&mut self) {
             self.0.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
+    let env = environment(Instant::now() + CASE_BUDGET)?;
     let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let guard = Dropped(dropped.clone());
     let result: Result<(), Error> = env
@@ -136,13 +145,15 @@ async fn deadline_drops_owned_pending_operation() {
         .await;
     assert!(matches!(result, Err(Error::Deadline)));
     assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    Ok(())
 }
 #[tokio::test]
-async fn cancellation_unblocks_pending_operations() {
-    let env = environment(Instant::now() + CASE_BUDGET);
+async fn cancellation_unblocks_pending_operations() -> TestResult {
+    let env = environment(Instant::now() + CASE_BUDGET)?;
     env.cancel.cancel();
     let result: Result<(), Error> = env.bounded(futures_util::future::pending()).await;
     assert!(matches!(result, Err(Error::Cancelled)));
+    Ok(())
 }
 #[tokio::test]
 async fn case_names_fail_before_docker_connection() {
@@ -163,13 +174,13 @@ async fn case_names_fail_before_docker_connection() {
     ));
 }
 
-pub(super) async fn request(socket: &mut tokio::net::TcpStream) -> String {
+pub(super) async fn request(socket: &mut tokio::net::TcpStream) -> TestResult<String> {
     use tokio::io::AsyncReadExt;
     let mut bytes = Vec::new();
     while !bytes.ends_with(b"\r\n\r\n") {
-        bytes.push(socket.read_u8().await.unwrap());
+        bytes.push(socket.read_u8().await?);
     }
-    let header = String::from_utf8(bytes).unwrap();
+    let header = String::from_utf8(bytes)?;
     let length = header
         .lines()
         .find_map(|l| {
@@ -177,25 +188,25 @@ pub(super) async fn request(socket: &mut tokio::net::TcpStream) -> String {
                 .strip_prefix("content-length: ")
                 .map(str::to_string)
         })
-        .map(|l| l.parse::<usize>().unwrap())
+        .map(|l| l.parse::<usize>())
+        .transpose()?
         .unwrap_or(0);
     let mut body = vec![0; length];
-    socket.read_exact(&mut body).await.unwrap();
-    header + &String::from_utf8_lossy(&body)
+    socket.read_exact(&mut body).await?;
+    Ok(header + &String::from_utf8_lossy(&body))
 }
 #[tokio::test]
-async fn real_http_exec_timeout_retains_output_and_closes_socket() {
+async fn real_http_exec_timeout_retains_output_and_closes_socket() -> TestResult {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let docker = Docker::connect_with_http(
-        &format!("http://{}", listener.local_addr().unwrap()),
+        &format!("http://{}", listener.local_addr()?),
         60,
         API_DEFAULT_VERSION,
-    )
-    .unwrap();
+    )?;
     let server = tokio::spawn(async move {
-        let (mut first, _) = listener.accept().await.unwrap();
-        let req = request(&mut first).await;
+        let (mut first, _) = listener.accept().await?;
+        let req = request(&mut first).await?;
         assert!(req.contains("/containers/test/exec"));
         let body = r#"{"Id":"exec-id"}"#;
         first
@@ -207,20 +218,17 @@ async fn real_http_exec_timeout_retains_output_and_closes_socket() {
                 )
                 .as_bytes(),
             )
-            .await
-            .unwrap();
+            .await?;
         drop(first);
-        let (mut stream, _) = listener.accept().await.unwrap();
-        assert!(request(&mut stream).await.contains("/exec/exec-id/start"));
-        stream.write_all(b"HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n\x01\0\0\0\0\0\0\x03abc\x02\0\0\0\0\0\0\x03err").await.unwrap();
+        let (mut stream, _) = listener.accept().await?;
+        assert!(request(&mut stream).await?.contains("/exec/exec-id/start"));
+        stream.write_all(b"HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n\x01\0\0\0\0\0\0\x03abc\x02\0\0\0\0\0\0\x03err").await?;
         let mut byte = [0];
         assert_eq!(
-            timeout(Duration::from_secs(2), stream.read(&mut byte))
-                .await
-                .unwrap()
-                .unwrap(),
+            timeout(Duration::from_secs(2), stream.read(&mut byte)).await??,
             0
         );
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     });
     let env = Environment {
         docker,
@@ -242,5 +250,6 @@ async fn real_http_exec_timeout_retains_output_and_closes_socket() {
             stderr: b"err".to_vec()
         }
     );
-    server.await.unwrap();
+    server.await??;
+    Ok(())
 }

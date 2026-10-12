@@ -13,15 +13,15 @@ Check exact exit status and separate output streams through `CheckCommand`.
 
 ### Commands under test
 
-| Command path | Purpose |
-| --- | --- |
-| `echo` | Print a greeting. |
+| Command path | Purpose           |
+| ------------ | ----------------- |
+| `echo`       | Print a greeting. |
 
 ### Arguments and options
 
-| Argument or option | Purpose |
-| --- | --- |
-| `hello from e2e` | Pass the greeting as one argument. |
+| Argument or option | Purpose                            |
+| ------------------ | ---------------------------------- |
+| `hello from e2e`   | Pass the greeting as one argument. |
 
 ### Preconditions and fixtures
 
@@ -50,20 +50,20 @@ Check a file workflow with multiple commands in one container.
 
 ### Commands under test
 
-| Command path | Purpose |
-| --- | --- |
-| `sh` | Write and append file content. |
-| `cat` | Read the completed file. |
-| `stat` | Read the binary file permission bits. |
+| Command path | Purpose                               |
+| ------------ | ------------------------------------- |
+| `sh`         | Write and append file content.        |
+| `cat`        | Read the completed file.              |
+| `stat`       | Read the binary file permission bits. |
 
 ### Arguments and options
 
-| Argument or option | Purpose |
-| --- | --- |
-| `-c` | Execute the fixture script or select the `stat` output format. |
-| `%a` | Print the file permission bits in octal. |
-| `/workspace/result.txt` | Select the text fixture file. |
-| `/workspace/binary.bin` | Select the binary fixture file. |
+| Argument or option      | Purpose                                                        |
+| ----------------------- | -------------------------------------------------------------- |
+| `-c`                    | Execute the fixture script or select the `stat` output format. |
+| `%a`                    | Print the file permission bits in octal.                       |
+| `/workspace/result.txt` | Select the text fixture file.                                  |
+| `/workspace/binary.bin` | Select the binary fixture file.                                |
 
 ### Preconditions and fixtures
 
@@ -101,16 +101,16 @@ Check that an expected nonzero command result does not fail the scenario.
 
 ### Commands under test
 
-| Command path | Purpose |
-| --- | --- |
-| `sh` | Print a message and return a selected exit code. |
+| Command path | Purpose                                          |
+| ------------ | ------------------------------------------------ |
+| `sh`         | Print a message and return a selected exit code. |
 
 ### Arguments and options
 
-| Argument or option | Purpose |
-| --- | --- |
-| `-c` | Execute the fixture script. |
-| `7` | Select the expected exit code. |
+| Argument or option | Purpose                        |
+| ------------------ | ------------------------------ |
+| `-c`               | Execute the fixture script.    |
+| `7`                | Select the expected exit code. |
 
 ### Preconditions and fixtures
 
@@ -139,17 +139,17 @@ Check native separate output streams, working directory, and environment through
 
 ### Commands under test
 
-| Command path | Purpose |
-| --- | --- |
-| `sh` | Print the environment and a diagnostic. |
+| Command path | Purpose                                 |
+| ------------ | --------------------------------------- |
+| `sh`         | Print the environment and a diagnostic. |
 
 ### Arguments and options
 
-| Argument or option | Purpose |
-| --- | --- |
-| `-c` | Execute the output fixture script. |
+| Argument or option               | Purpose                                     |
+| -------------------------------- | ------------------------------------------- |
+| `-c`                             | Execute the output fixture script.          |
 | `HOME=/workspace/synthetic-home` | Set a synthetic home value for the command. |
-| `/workspace` | Set the command working directory. |
+| `/workspace`                     | Set the command working directory.          |
 
 ### Preconditions and fixtures
 
@@ -180,20 +180,20 @@ Check physical path types, absent paths, and literal symbolic-link targets.
 
 ### Commands under test
 
-| Command path | Purpose |
-| --- | --- |
-| `mkdir` | Create a directory fixture. |
-| `ln` | Create symbolic-link fixtures. |
-| `test` | Check path existence and type through helper assertions. |
-| `readlink` | Read a literal symbolic-link target through the helper. |
+| Command path | Purpose                                                  |
+| ------------ | -------------------------------------------------------- |
+| `mkdir`      | Create a directory fixture.                              |
+| `ln`         | Create symbolic-link fixtures.                           |
+| `test`       | Check path existence and type through helper assertions. |
+| `readlink`   | Read a literal symbolic-link target through the helper.  |
 
 ### Arguments and options
 
-| Argument or option | Purpose |
-| --- | --- |
-| `-s` | Create a symbolic link. |
+| Argument or option     | Purpose                                                          |
+| ---------------------- | ---------------------------------------------------------------- |
+| `-s`                   | Create a symbolic link.                                          |
 | `-e`, `-L`, `-f`, `-d` | Probe existence, symbolic links, regular files, and directories. |
-| `--` | End options before the path passed to `readlink`. |
+| `--`                   | End options before the path passed to `readlink`.                |
 
 ### Preconditions and fixtures
 
@@ -233,15 +233,15 @@ Check that a command with an open output connection returns when the case deadli
 
 ### Commands under test
 
-| Command path | Purpose |
-| --- | --- |
-| `sleep` | Keep the command running until the harness cancels it. |
+| Command path | Purpose                                                |
+| ------------ | ------------------------------------------------------ |
+| `sleep`      | Keep the command running until the harness cancels it. |
 
 ### Arguments and options
 
-| Argument or option | Purpose |
-| --- | --- |
-| `infinity` | Keep the command running without a normal exit. |
+| Argument or option | Purpose                                         |
+| ------------------ | ----------------------------------------------- |
+| `infinity`         | Keep the command running without a normal exit. |
 
 ### Preconditions and fixtures
 

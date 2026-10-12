@@ -10,15 +10,15 @@ Verify that the CLI image can print a caller-visible greeting successfully.
 
 ### Commands under test
 
-| Command path | Purpose |
-| --- | --- |
-| `echo` | Print the expected greeting. |
+| Command path | Purpose                      |
+| ------------ | ---------------------------- |
+| `echo`       | Print the expected greeting. |
 
 ### Arguments and options
 
-| Argument or option | Purpose |
-| --- | --- |
-| `hello from e2e` | Supply the exact greeting as one positional argument. |
+| Argument or option | Purpose                                               |
+| ------------------ | ----------------------------------------------------- |
+| `hello from e2e`   | Supply the exact greeting as one positional argument. |
 
 ### Preconditions and fixtures
 
@@ -32,13 +32,13 @@ Verify that the CLI image can print a caller-visible greeting successfully.
 
 ### Expected results
 
-| Observation | Expected result |
-| --- | --- |
-| Exit status | `0` |
-| Standard output | Exactly `hello from e2e\n` |
-| Standard error | Exactly empty |
-| Persisted state | No state is persisted. |
-| Filesystem | No files are created or changed. |
+| Observation     | Expected result                  |
+| --------------- | -------------------------------- |
+| Exit status     | `0`                              |
+| Standard output | Exactly `hello from e2e\n`       |
+| Standard error  | Exactly empty                    |
+| Persisted state | No state is persisted.           |
+| Filesystem      | No files are created or changed. |
 
 ### Notes
 
@@ -52,15 +52,15 @@ Verify that an expected nonzero CLI result remains observable without failing th
 
 ### Commands under test
 
-| Command path | Purpose |
-| --- | --- |
-| `false` | Produce the expected nonzero exit status. |
+| Command path | Purpose                                   |
+| ------------ | ----------------------------------------- |
+| `false`      | Produce the expected nonzero exit status. |
 
 ### Arguments and options
 
-| Argument or option | Purpose |
-| --- | --- |
-| None | The command takes no arguments in this scenario. |
+| Argument or option | Purpose                                          |
+| ------------------ | ------------------------------------------------ |
+| None               | The command takes no arguments in this scenario. |
 
 ### Preconditions and fixtures
 
@@ -74,13 +74,13 @@ Verify that an expected nonzero CLI result remains observable without failing th
 
 ### Expected results
 
-| Observation | Expected result |
-| --- | --- |
-| Exit status | `1` |
-| Standard output | Empty |
-| Standard error | Exactly empty |
-| Persisted state | No state is persisted. |
-| Filesystem | No files are created or changed. |
+| Observation     | Expected result                  |
+| --------------- | -------------------------------- |
+| Exit status     | `1`                              |
+| Standard output | Empty                            |
+| Standard error  | Exactly empty                    |
+| Persisted state | No state is persisted.           |
+| Filesystem      | No files are created or changed. |
 
 ### Notes
 

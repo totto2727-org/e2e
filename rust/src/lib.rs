@@ -14,7 +14,10 @@ use bollard::{
     container::LogOutput,
     exec::StartExecResults,
     models::{ContainerCreateBody, ExecConfig},
-    query_parameters::*,
+    query_parameters::{
+        CreateContainerOptionsBuilder, DownloadFromContainerOptionsBuilder,
+        RemoveContainerOptionsBuilder, UploadToContainerOptionsBuilder,
+    },
 };
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use std::{
@@ -54,6 +57,10 @@ impl Command {
             ..Self::default()
         }
     }
+    /// Validate the executable and reject NUL bytes in command fields.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidInput`] for an empty executable or NUL input.
     pub fn validate(&self) -> Result<(), Error> {
         if self.args.first().is_none_or(String::is_empty) {
             return Err(Error::InvalidInput("empty executable".into()));
@@ -122,10 +129,10 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Docker(e) => Some(e),
             Self::Archive(e) => Some(e),
             Self::Cleanup { cause, .. } | Self::Case { cause, .. } => Some(cause),
-            Self::Execution {
+            Self::Docker(e)
+            | Self::Execution {
                 failure: ExecutionFailure::Docker(e),
                 ..
             } => Some(e),
@@ -186,14 +193,19 @@ pub struct Environment {
 }
 impl Environment {
     /// Immutable identity for isolation assertions, not a mutable Docker handle.
+    #[must_use]
     pub fn container_id(&self) -> &str {
         &self.id
     }
     async fn bounded<T>(&self, fut: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
-        tokio::select! { biased; _ = self.cancel.cancelled() => Err(Error::Cancelled),
+        tokio::select! { biased; () = self.cancel.cancelled() => Err(Error::Cancelled),
         result = timeout_at(self.deadline, fut) => result.map_err(|_| Error::Deadline)? }
     }
     /// Execute argv and retain bytes on transport, cancellation or deadline failure.
+    ///
+    /// # Errors
+    /// Returns an input error for invalid argv and an execution error with partial
+    /// output for Docker, protocol, cancellation, or deadline failures.
     pub async fn run(&self, command: Command) -> Result<CommandResult, Error> {
         command.validate()?;
         let mut output = PartialOutput::default();
@@ -261,14 +273,22 @@ impl Environment {
             }),
         }
     }
+    /// Execute a command and compare its exit code and both streams exactly.
+    ///
+    /// # Errors
+    /// Returns execution errors from [`Self::run`] or [`Error::Assertion`] on mismatch.
     pub async fn check_command(
         &self,
         command: Command,
         expected: CommandResult,
     ) -> Result<(), Error> {
-        compare_command(self.run(command).await?, expected)
+        compare_command(&self.run(command).await?, &expected)
     }
-    /// Copy exact bytes with mode 0644 into an existing parent directory.
+    /// Copy exact bytes into a regular file with mode `0644`.
+    ///
+    /// # Errors
+    /// Returns errors for invalid paths, archive construction, Docker transport,
+    /// cancellation, or deadline expiry. The parent directory must already exist.
     pub async fn write_file(&self, path: &str, bytes: &[u8]) -> Result<(), Error> {
         path_valid(path)?;
         let path = Path::new(path);
@@ -296,6 +316,11 @@ impl Environment {
         })
         .await
     }
+    /// Read exact bytes from a single regular-file Docker archive entry.
+    ///
+    /// # Errors
+    /// Returns errors for invalid paths or archives, Docker transport, cancellation,
+    /// or deadline expiry.
     pub async fn read_file(&self, path: &str) -> Result<Vec<u8>, Error> {
         path_valid(path)?;
         self.bounded(async {
@@ -315,6 +340,10 @@ impl Environment {
         })
         .await
     }
+    /// Compare a file's bytes exactly.
+    ///
+    /// # Errors
+    /// Returns errors from [`Self::read_file`] or [`Error::Assertion`] on mismatch.
     pub async fn check_file(&self, path: &str, expected: &[u8]) -> Result<(), Error> {
         let actual = self.read_file(path).await?;
         if actual == expected {
@@ -340,6 +369,10 @@ impl Environment {
             }),
         }
     }
+    /// Assert that no path exists, including a dangling symbolic link.
+    ///
+    /// # Errors
+    /// Returns input, execution, or assertion errors when the probes fail.
     pub async fn check_missing(&self, path: &str) -> Result<(), Error> {
         if self.probe("-e", path).await? || self.probe("-L", path).await? {
             return Err(Error::Assertion(format!("{path:?} exists")));
@@ -352,12 +385,24 @@ impl Environment {
         }
         Ok(())
     }
+    /// Assert a physical regular file, not a symbolic link.
+    ///
+    /// # Errors
+    /// Returns input, execution, or assertion errors when the probes fail.
     pub async fn check_regular_file(&self, path: &str) -> Result<(), Error> {
         self.physical("-f", path).await
     }
+    /// Assert a physical directory, not a symbolic link.
+    ///
+    /// # Errors
+    /// Returns input, execution, or assertion errors when the probes fail.
     pub async fn check_directory(&self, path: &str) -> Result<(), Error> {
         self.physical("-d", path).await
     }
+    /// Assert a symbolic link with exactly the supplied literal target.
+    ///
+    /// # Errors
+    /// Returns input, execution, or assertion errors when the probes fail.
     pub async fn check_symlink(&self, path: &str, target: &str) -> Result<(), Error> {
         valid(target)?;
         if !self.probe("-L", path).await? {
@@ -381,7 +426,7 @@ fn append_output(output: &mut PartialOutput, chunk: LogOutput) -> Result<(), Err
     }
     Ok(())
 }
-fn compare_command(actual: CommandResult, expected: CommandResult) -> Result<(), Error> {
+fn compare_command(actual: &CommandResult, expected: &CommandResult) -> Result<(), Error> {
     if actual == expected {
         Ok(())
     } else {
@@ -567,6 +612,10 @@ impl Drop for CancelOnDrop {
 /// Run at most two cases concurrently, resolving only a caller-owned local image.
 /// Dropping this future signals cancellation to a supervised cleanup task.
 /// Keep the Tokio runtime alive to allow that cleanup to finish.
+///
+/// # Errors
+/// Returns input or setup errors before execution, and retains case and cleanup
+/// failures in [`Error::Multiple`]. Caller panics become [`Error::Panic`].
 pub async fn run_cases(image: &str, cases: Vec<Case>) -> Result<(), Error> {
     valid(image)?;
     if image.is_empty() {
@@ -590,7 +639,7 @@ async fn setup<T>(
     cancel: &CancellationToken,
     future: impl Future<Output = Result<T, Error>>,
 ) -> Result<T, Error> {
-    tokio::select! { biased; _ = cancel.cancelled() => Err(Error::Cancelled), result = timeout(CASE_BUDGET, future) => result.map_err(|_| Error::Deadline)? }
+    tokio::select! { biased; () = cancel.cancelled() => Err(Error::Cancelled), result = timeout(CASE_BUDGET, future) => result.map_err(|_| Error::Deadline)? }
 }
 async fn supervise(
     image: String,
@@ -618,7 +667,7 @@ async fn supervise(
             let slots = slots.clone();
             let cancel = cancel.clone();
             pending.push(async move {
-                let permit = tokio::select! { _ = cancel.cancelled() => return Err(Error::Cancelled), p = slots.acquire_owned() => p.map_err(|_| Error::Cancelled)? };
+                let permit = tokio::select! { () = cancel.cancelled() => return Err(Error::Cancelled), p = slots.acquire_owned() => p.map_err(|_| Error::Cancelled)? };
                 let deadline = Instant::now() + CASE_BUDGET;
                 let case_cancel = cancel.child_token();
                 let resource = Resource::new(docker.clone(), &owner);
@@ -627,10 +676,10 @@ async fn supervise(
                     docker.start_container(&id, None).await?;
                     Ok(Environment { docker: docker.clone(), id, deadline, cancel: case_cancel.clone() })
                 };
-                let result = tokio::select! { _ = cancel.cancelled() => Err(Error::Cancelled), r = timeout_at(deadline, action) => r.map_err(|_| Error::Deadline).and_then(|r| r) };
+                let result = tokio::select! { () = cancel.cancelled() => Err(Error::Cancelled), r = timeout_at(deadline, action) => r.map_err(|_| Error::Deadline).and_then(|r| r) };
                 let result = match result {
                     Err(e) => Err(e), Ok(env) => {
-                        tokio::select! { _ = cancel.cancelled() => Err(Error::Cancelled),
+                        tokio::select! { () = cancel.cancelled() => Err(Error::Cancelled),
                             r = AssertUnwindSafe(async { (case.action)(env).await }).catch_unwind() => r.unwrap_or(Err(Error::Panic)) }
                     }
                 };

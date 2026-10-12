@@ -78,8 +78,11 @@ function ownership(): Owned {
 export class Suite {
   private readonly slots = new Slots()
   private imageID = ''
-  private lease?: Owned
-  constructor(private readonly transport: Transport = new Engine()) {}
+  private lease: Owned | undefined
+  private readonly transport: Transport
+  constructor(transport: Transport = new Engine()) {
+    this.transport = transport
+  }
 
   async open(image: string): Promise<void> {
     const setup = budget(60_000)

@@ -40,16 +40,16 @@ Select the `Case` list before `runCases` when you need to run only some actions.
 
 ## Values and operations
 
-| Value or operation | Haskell API |
-| --- | --- |
-| Case | `Case { name :: String, action :: Environment -> IO () }` |
-| Command | `Command { args :: [String], workingDir :: Maybe String, env :: [String] }` |
-| Result | `Result { exitCode :: Int, stdout :: ByteString, stderr :: ByteString }` |
-| Execute | `run :: Environment -> Command -> IO Result` |
-| Exact command assertion | `checkCommand :: Environment -> Command -> Result -> IO ()` |
-| File transfer | `writeFile`, `readFile`, `checkFile` |
-| Physical path assertions | `checkMissing`, `checkRegularFile`, `checkDirectory`, `checkSymlink` |
-| Read-only container identity | `containerID :: Environment -> String` |
+| Value or operation           | Haskell API                                                                 |
+| ---------------------------- | --------------------------------------------------------------------------- |
+| Case                         | `Case { name :: String, action :: Environment -> IO () }`                   |
+| Command                      | `Command { args :: [String], workingDir :: Maybe String, env :: [String] }` |
+| Result                       | `Result { exitCode :: Int, stdout :: ByteString, stderr :: ByteString }`    |
+| Execute                      | `run :: Environment -> Command -> IO Result`                                |
+| Exact command assertion      | `checkCommand :: Environment -> Command -> Result -> IO ()`                 |
+| File transfer                | `writeFile`, `readFile`, `checkFile`                                        |
+| Physical path assertions     | `checkMissing`, `checkRegularFile`, `checkDirectory`, `checkSymlink`        |
+| Read-only container identity | `containerID :: Environment -> String`                                      |
 
 `Environment` is opaque and valid only during its case action.
 Do not retain it or start unjoined operations that use it after the action returns.
@@ -140,7 +140,9 @@ See the [official Docker Engine API](https://docs.docker.com/reference/api/engin
 Run these commands from the repository root:
 
 ```sh
-nix develop .#haskell -c just --justfile haskell/Justfile ci
+pnpm exec vp run @totto2727/e2e-haskell#check
+pnpm exec vp run @totto2727/e2e-haskell#build
+pnpm exec vp run @totto2727/e2e-haskell#test
 ```
 
 `check` typechecks the library, native tests, and opt-in Docker scenarios with warnings treated as errors.
@@ -148,6 +150,9 @@ It also checks the Cabal manifest.
 The checkout has no declared license or release maintainer, so only those two publication checks are excluded.
 This is not a claim that Hackage would accept the package.
 `test` runs Hspec against controlled HTTP/socket fixtures without Docker.
+There is no Haskell workspace template to align with; this package retains idiomatic Cabal manifests and Hspec suites rather than inventing template settings.
+The local tasks use explicit Cabal suite targets, with build outputs under `haskell/tmp/cabal/`.
+For standalone Haskell work without the JavaScript task runner, `nix develop .#haskell -c just --justfile haskell/Justfile ci` runs the same native checks.
 The root Nix shell supplies pinned GHC, Cabal, and installed compatible packages.
 The package's published dependency bounds do not require `allow-newer`.
 
@@ -155,11 +160,12 @@ Consumers can add this directory as a local Cabal package.
 For example, run `cabal build --offline --builddir=tmp/cabal lib:cli-e2e` from `haskell/` within the Nix shell.
 Normal `cabal test native` does not require Docker.
 The `docker-e2e` suite is disabled unless `-fdocker-e2e` is supplied explicitly.
+The task commands select `test:native` or `-fdocker-e2e test:docker-e2e` before execution, without an environment switch or post-execution Hspec `--match` filtering.
 
 After the caller builds `e2e-example:local`, run the separate Docker task:
 
 ```sh
-nix develop .#haskell -c just --justfile haskell/Justfile e2e
+pnpm exec vp run @totto2727/e2e-haskell#e2e
 ```
 
 This task does not build or pull an image.

@@ -1,0 +1,9 @@
+default:
+    @just --list
+
+build:
+    cargo test --offline --locked --test multiple_scenarios --no-run --target-dir ../../../../../../tmp/scenario-doc-examples/rust
+
+# Explicit Docker acceptance selects only the ignored consumer test.
+e2e:
+    cargo test --offline --locked --test multiple_scenarios --target-dir ../../../../../../tmp/scenario-doc-examples/rust -- --ignored --nocapture

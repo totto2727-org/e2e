@@ -1,7 +1,6 @@
-import { expect, test } from 'vitest'
-
 import * as cli from '@totto2727/e2e-cli'
 import * as integration from '@totto2727/e2e-cli/vitest'
+import { expect, test } from 'vitest'
 
 test('built package exposes only the public API through its declared entrypoints', () => {
   expect(Object.keys(cli).sort()).toEqual(['DeadlineError', 'DockerError', 'ExecutionError', 'runCases'])

@@ -13,23 +13,23 @@ A container is not a shell abstraction: commands are argv entries, and shell syn
 
 ## Implementations
 
-| Language | Implementation and API | Framework | Shared API | Native checks | Docker acceptance |
-| --- | --- | --- | --- | --- | --- |
-| Go | [go/README.md](./go/README.md) | `testing` | Implemented. | Passed, including race tests. | Six common cases passed. |
-| Haskell | [haskell/README.md](./haskell/README.md) | Hspec outcomes | Implemented. | Passed, including a Cabal library build. | Six common cases passed. |
-| TypeScript | [typescript/README.md](./typescript/README.md) | Vitest | Implemented. | Passed, including built package imports. | Six common cases passed. |
-| Rust | [rust/README.md](./rust/README.md) | Tokio tests | Implemented. | Passed, including Clippy and rustdoc. | Six common cases passed. |
+| Language   | Implementation and API                         | Framework      | Shared API   | Native checks                            | Docker acceptance        |
+| ---------- | ---------------------------------------------- | -------------- | ------------ | ---------------------------------------- | ------------------------ |
+| Go         | [go/README.md](./go/README.md)                 | `testing`      | Implemented. | Passed, including race tests.            | Six common cases passed. |
+| Haskell    | [haskell/README.md](./haskell/README.md)       | Hspec outcomes | Implemented. | Passed, including a Cabal library build. | Six common cases passed. |
+| TypeScript | [typescript/README.md](./typescript/README.md) | Vitest         | Implemented. | Passed, including built package imports. | Six common cases passed. |
+| Rust       | [rust/README.md](./rust/README.md)             | Tokio tests    | Implemented. | Passed, including Clippy and rustdoc.    | Six common cases passed. |
 
 Each shared API includes command execution, exact assertions, byte file transfer, physical path checks, isolated cases, deadlines, and owned-resource cleanup.
 Docker acceptance uses a local Linux-container Engine over a Unix socket and verifies cleanup and image preservation. A controlled transport test is not Docker acceptance.
 No package publication or release is implied by this table.
 
-| Language | Backend | Additional connection behavior |
-| --- | --- | --- |
-| Go | Testcontainers and the native Moby exec API. | Testcontainers configuration and negotiated or explicit API versions. Configured TLS has a native transport regression test; initial TLS dialing follows the upstream dialer. |
-| Haskell | Native Engine HTTP through `http-client`. | Unix sockets and HTTP/TCP endpoints. Unversioned Engine endpoints; explicit API-version overrides and TLS are rejected. |
-| TypeScript | Native Engine HTTP through Node. | Unix sockets and HTTP/TCP endpoints. Unversioned Engine endpoints; explicit API-version overrides and TLS are rejected. |
-| Rust | Bollard. | Unix sockets and HTTP/TCP endpoints with API negotiation. Explicit API-version overrides and TLS are rejected. |
+| Language   | Backend                                      | Additional connection behavior                                                                                                                                                |
+| ---------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Go         | Testcontainers and the native Moby exec API. | Testcontainers configuration and negotiated or explicit API versions. Configured TLS has a native transport regression test; initial TLS dialing follows the upstream dialer. |
+| Haskell    | Native Engine HTTP through `http-client`.    | Unix sockets and HTTP/TCP endpoints. Unversioned Engine endpoints; explicit API-version overrides and TLS are rejected.                                                       |
+| TypeScript | Native Engine HTTP through Node.             | Unix sockets and HTTP/TCP endpoints. Unversioned Engine endpoints; explicit API-version overrides and TLS are rejected.                                                       |
+| Rust       | Bollard.                                     | Unix sockets and HTTP/TCP endpoints with API negotiation. Explicit API-version overrides and TLS are rejected.                                                                |
 
 Connection support is not a claim that every transport has passed real-daemon acceptance.
 Use the language READMEs for cancellation boundaries, non-UTF-8 handling, and concrete argument types.
@@ -50,18 +50,18 @@ Never infer application exit status solely from the host `docker exec` process: 
 
 Names below identify behaviors, not mandatory spellings in every language.
 
-| Operation | Contract |
-| --- | --- |
-| Run cases | Resolve a local prebuilt image once and run each case in a fresh container. |
-| Run command | Execute a `Command` and return a separate-stream `Result`. |
-| Check command | Execute a command and compare its exit code, stdout, and stderr exactly against an expected `Result`. An empty expected stream asserts absence, not an ignored field. |
-| Write file | Copy exact bytes to a container path with mode `0644`. The parent directory must exist. |
-| Read file | Return exact bytes from a container file. |
-| Check file | Read a file and compare exact bytes. |
-| Check missing | Reject any existing path, including a dangling symbolic link. |
-| Check regular file | Require a physical regular file, not a symbolic link to a file. |
-| Check directory | Require a physical directory, not a symbolic link to a directory. |
-| Check symbolic link | Compare the literal target, without resolving or normalizing it. A dangling target is valid. |
+| Operation           | Contract                                                                                                                                                              |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run cases           | Resolve a local prebuilt image once and run each case in a fresh container.                                                                                           |
+| Run command         | Execute a `Command` and return a separate-stream `Result`.                                                                                                            |
+| Check command       | Execute a command and compare its exit code, stdout, and stderr exactly against an expected `Result`. An empty expected stream asserts absence, not an ignored field. |
+| Write file          | Copy exact bytes to a container path with mode `0644`. The parent directory must exist.                                                                               |
+| Read file           | Return exact bytes from a container file.                                                                                                                             |
+| Check file          | Read a file and compare exact bytes.                                                                                                                                  |
+| Check missing       | Reject any existing path, including a dangling symbolic link.                                                                                                         |
+| Check regular file  | Require a physical regular file, not a symbolic link to a file.                                                                                                       |
+| Check directory     | Require a physical directory, not a symbolic link to a directory.                                                                                                     |
+| Check symbolic link | Compare the literal target, without resolving or normalizing it. A dangling target is valid.                                                                          |
 
 Path assertions require `test` with `-e`, `-L`, `-f`, and `-d`, and `readlink` with `--` support in the image.
 Probe exit codes other than `0` or `1` are infrastructure errors, not successful absence checks.
@@ -93,14 +93,14 @@ Additional remote-daemon, TLS, or platform support must be documented and tested
 
 Each language must exercise its public interface against the same caller-built image and report these observations:
 
-| Case | Observable behavior |
-| --- | --- |
-| Greeting | Exact stdout, empty stderr, and exit code zero. |
-| File workflow | Multiple argv commands share one case container; copied bytes equal the persisted file. |
-| Expected failure | Exit code `7` is a successful execution result, not an infrastructure error. |
-| Separate streams | Working directory and environment reach the process; stdout and stderr remain distinct on a nonzero result. |
-| Physical paths | Regular files, directories, relative and dangling links, and missing paths follow the exact assertion contracts; invalid states are rejected. |
-| Deadline | An indefinitely running command returns a deadline error; cleanup removes the container. |
+| Case             | Observable behavior                                                                                                                           |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Greeting         | Exact stdout, empty stderr, and exit code zero.                                                                                               |
+| File workflow    | Multiple argv commands share one case container; copied bytes equal the persisted file.                                                       |
+| Expected failure | Exit code `7` is a successful execution result, not an infrastructure error.                                                                  |
+| Separate streams | Working directory and environment reach the process; stdout and stderr remain distinct on a nonzero result.                                   |
+| Physical paths   | Regular files, directories, relative and dangling links, and missing paths follow the exact assertion contracts; invalid states are rejected. |
+| Deadline         | An indefinitely running command returns a deadline error; cleanup removes the container.                                                      |
 
 Also verify distinct container identities for separate cases, no scenario or lease containers left behind, and preservation of the caller-owned image.
 Native tests should cover invalid input, infrastructure errors, exact comparison failures, cleanup failures, and cancellation at controlled transport boundaries without requiring Docker.
@@ -109,18 +109,67 @@ Keep Docker execution behind an explicit E2E task. Normal build and unit-test ta
 ## Repository and tasks
 
 `go/`, `haskell/`, `typescript/`, and `rust/` contain independently usable libraries and their language-specific API documentation.
-The root Justfile is the shared entrypoint for checks and explicit Docker acceptance.
-See [AGENTS.md](./AGENTS.md) for contributor instructions and the language READMEs for concrete commands.
+This mixed-language workspace uses Vite+ for task dependencies, caching, and cross-project execution.
+Language-local Justfiles retain their template commands and complex scripts; there is no root Justfile that orchestrates projects.
+The root `pnpm-lock.yaml` is authoritative for the workspace.
 
 ```sh
-nix develop -c just ci
-nix develop -c just e2e
+nix develop -c vp install --frozen-lockfile
+nix develop -c vp run ci
+nix develop -c vp run e2e
 ```
 
-`ci` runs all language checks, builds, and native tests without Docker.
-`e2e` first builds the shared image through the Go example task, then runs each language's acceptance task in sequence.
-For one implementation, use a named shell and language task, such as `nix develop .#rust -c just rust/ci`.
-Standalone language E2E tasks other than Go require the caller to build `e2e-example:local` first.
+`ci` checks, builds, and runs native tests without Docker.
+`e2e` first builds the shared image, then runs the language acceptance tasks and the [equivalent documentation samples](./.agents/skills/document-e2e-scenarios/references/example/README.md) sequentially.
+`ci` also compiles those exact sample sources through their real local package dependencies without executing Docker cases.
+Docker image creation and acceptance are not cached because daemon state is not a source-file output.
+Pure checks and builds are cached with declared source inputs and recoverable output paths.
+For example, `nix develop -c vp run @totto2727/e2e-rust#ci` selects only the Rust task graph.
+The native libraries remain usable without JavaScript: `nix develop .#rust -c bash -c 'cd rust && just ci'` runs the standalone Rust template commands.
+
+### Task categories
+
+| Aggregate       | Scope                                                                                                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fix`           | Automatic formatter and linter corrections. Do not cache mutations.                                                                                                         |
+| `check`         | All static checks: formatting, linting, and type checking.                                                                                                                  |
+| `build`         | Produce the final application or library artifacts.                                                                                                                         |
+| `test`          | Lightweight, reproducible tests. Controlled transport fixtures, in-memory databases, and temporary directories are permitted; external production systems are not required. |
+| `pre*`, `post*` | Named prerequisite or follow-up stages, wired through explicit dependencies. Type generation can be a `prebuild` dependency shared by `check` and `test`.                   |
+| `e2e`           | Explicitly selected heavyweight or multi-system acceptance tests, excluded from normal `test` and never cached against source files alone.                                  |
+
+Executing leaf tasks use `<category>:<CLI>`, such as `check:vp`, `check:clippy`, `build:cargo`, and `test:vitest`; the corresponding base task aggregates them through `dependsOn`.
+A case-specific suffix can distinguish consumers that use the same CLI. Cross-project orchestration uses named dependencies, not a sequence of hidden lifecycle hooks.
+`ci` is a justified convenience aggregate for checks, artifacts, and native tests. `pree2e:docker` prepares the caller-owned fixture and its sample image tag; it is not part of native CI.
+Package inspection is a build follow-up, not an extra test category. Other proposed categories need a concrete purpose that does not fit these stages.
+
+### Task-runner patterns
+
+| Project tree and task                                                                         | Recommended pattern                                                                                                                               |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| JavaScript or mixed-language projects, especially with shared dependencies or useful caching. | Use Vite+ tasks and `dependsOn` to orchestrate projects. Put small commands directly in `vite.config.ts`.                                         |
+| Complex options, multi-line scripts, or repeatable project-local procedures.                  | Keep the procedure in a local Justfile and register `just <recipe>` as a Vite+ task when the project participates in a Vite+ workspace.           |
+| No JavaScript in the project or any child, and no useful cache-control requirement.           | Use native language commands or task aliases for lightweight tasks and Just for heavy procedures. Do not introduce Node solely for orchestration. |
+
+Select tests through the runner's standard command options, not an environment-dependent file list:
+
+| Language   | Native selection                                                              | Explicit Docker selection                                                |
+| ---------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Go         | Run `go test -race ./...` in `go/`.                                           | Run `go test -race ./...` in the separate `go/example/` module.          |
+| Haskell    | `cabal test native`                                                           | `cabal test docker-e2e -f docker-e2e`                                    |
+| TypeScript | `vp test run --project native`; built package smoke uses `--project package`. | `vp test run --project docker`                                           |
+| Rust       | `cargo test --locked --all-features` leaves ignored Docker tests unexecuted.  | `cargo test --locked --all-features --test e2e -- --ignored --nocapture` |
+
+Standalone Docker tasks require a caller-built `e2e-example:local` image.
+The root E2E task supplies that acceptance fixture, not the libraries themselves.
+See [AGENTS.md](./AGENTS.md) for contributor instructions and each language README for full toolchain commands.
+
+### Template basis
+
+TypeScript settings extend the [Vite+ library template](https://github.com/totto2727-org/template-vite-plus-lib/tree/ef2173ab26407fdc45b4b05106b5eed561062dd1), including its strict TypeScript presets, formatter, lint settings, package-manager safeguards, and Nix Vite+ overlay.
+Go and Rust use the [Go template](https://github.com/totto2727-org/template-go-simple/tree/b12903f8f8bf458b93538237c2ee2016dd54865e) and [Rust template](https://github.com/totto2727-org/template-rust-simple/tree/08ffe1d2d6a27e8d0b4c25f98e5a89a96d8ec1c1) settings, with library-specific build targets, locked dependencies, and explicit Docker tasks.
+The workspace has no Haskell template; Haskell retains its Cabal/Hspec configuration rather than claiming template equivalence.
+Library exports, Node's Docker transport, Vitest projects, and acceptance fixtures are necessary extensions, not replacement toolchains.
 
 ## License
 

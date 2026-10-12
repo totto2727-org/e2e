@@ -9,3 +9,7 @@ typescript/tmp/
 typescript/dist/
 haskell/dist-newstyle/
 rust/target/
+**/_build/
+.vite/
+**/.vite/
+*.tgz

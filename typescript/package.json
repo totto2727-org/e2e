@@ -22,10 +22,12 @@
     "tar-stream": "^3.2.2"
   },
   "devDependencies": {
+    "@tsconfig/node-ts": "^23.6.4",
+    "@tsconfig/strictest": "^2.0.8",
     "@types/node": "^24.19.1",
     "@types/tar-stream": "^3.1.5",
     "typescript": "^7.0.2",
-    "vite-plus": "^1.1.0"
+    "vite-plus": "catalog:"
   },
   "peerDependencies": {
     "vitest": "^5.0.3"

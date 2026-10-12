@@ -95,31 +95,47 @@ The Vitest and archive APIs were consulted through the configured Context7 docum
 ## Toolchain and checks
 
 Use Node.js 24+, pnpm, and the local Vite+ CLI.
-`pnpm-lock.yaml` is authoritative, and package-local configuration enforces a strict 24-hour minimum release age without exclusions or lifecycle-script grants.
-Vite+ requires its bundled Vite alias and exact Vitest version, recorded with official migration/update references in `pnpm-workspace.yaml`.
-Resolved dependencies: `tar-stream 3.2.2`, `vite-plus 1.1.0`, `typescript 7.0.2`, `@types/node 24.19.1`, and `@types/tar-stream 3.1.5`.
-The Vite+ toolchain supplies `vitest 5.0.3` and the bundled Vite core alias at `1.1.0`.
-Validation used Node.js `24.18.1` and pnpm `11.21.0`.
+The repository-root `pnpm-lock.yaml` is authoritative, and its workspace configuration enforces a strict 24-hour minimum release age without exclusions or lifecycle-script grants.
+Vite+ requires its bundled Vite alias and exact Vitest version, recorded with official migration/update references in the repository-root `pnpm-workspace.yaml`.
+TypeScript configuration follows `template/vite-plus-lib`: `@tsconfig/strictest` and `@tsconfig/node-ts` with only the template's `target`, `module`, `noEmit`, and Node types settings.
+Formatter and type-aware lint options match the template, including import/package sorting and preserved Markdown wrapping.
+Packaging retains the template's ESM declaration generation, with the necessary Node platform, two public entrypoints, and external Vitest peer.
 The `/vitest` integration has an optional Vitest peer dependency so ordinary non-Vitest callers can use the root entrypoint.
 
 From the repository root:
 
 ```sh
-nix develop .#typescript -c bash -c 'cd typescript && pnpm install --frozen-lockfile'
-nix develop .#typescript -c just --justfile typescript/Justfile ci
+nix develop .#typescript -c vp install --frozen-lockfile
+nix develop .#typescript -c vp run --filter @totto2727/e2e-cli ci
 # Explicit Docker acceptance only, after the root builds e2e-example:local:
-nix develop .#typescript -c just --justfile typescript/Justfile e2e
+nix develop .#typescript -c vp run --filter @totto2727/e2e-cli e2e
 ```
 
-Normal tests use controlled HTTP servers and do not require Docker.
+Normal tests use controlled HTTP servers and reproducible local resources, such as temporary directories or in-memory fixtures, and do not require Docker or external services.
+Vitest 5.0.3 selects static projects through its standard `--project` option, without environment-variable include toggles.
+From `typescript/`, `vp test run` defaults to the `native` project, and `vp test run --project native` makes that selection explicit.
+Use `vp run test:vitest-package` to build and smoke-test both exported package entrypoints, or `vp test run --project package` when the build is already available.
+Use `vp test run --project docker` for Docker acceptance against the existing caller-built image.
 The explicit [Docker tests](test/docker.test.ts) register the six shared cases separately and verify distinct identities, exact file bytes/mode, removal of scenario and lease containers, and preservation of the caller-owned image.
-The `e2e` task disables Vite+ task caching so every invocation observes the current Docker daemon rather than replaying earlier success output.
+The `e2e` aggregate depends on `e2e:vitest`, which selects the Docker project against the existing image.
+Both tasks disable Vite+ task caching so every invocation observes the current Docker daemon rather than replaying earlier success output, and neither builds the image itself.
 The deadline case takes approximately one minute.
+
+The package task graph minimally extends the template with base `fix`, `check`, `build`, and `test` aggregates over CLI-specific leaves.
+`fix:vp` invokes `vp check --fix`, `check:vp` invokes `vp check`, and `build:vp` invokes `vp pack`; formatting, linting, and type checking remain a single Vite+ operation rather than artificially split tasks.
+`test:vitest` selects the native project and `test:vitest-package` selects the built-package project after `build`; `test` runs both without Docker.
+`postbuild:pnpm` explicitly depends on `build` and runs a private-package-safe `vp pm pack -- --dry-run` to validate package contents after generated outputs exist.
+`ci` depends on `check`, `test`, and `postbuild:pnpm`, never Docker acceptance.
+`fix` and `fix:vp` disable caching because they mutate source files, and `e2e` and `e2e:vitest` disable caching because they observe Docker.
+The remaining tasks retain caching; `check:vp`, `test:vitest`, `test:vitest-package`, and `postbuild:pnpm` declare `output: []` because checks, tests, and a package dry-run do not produce lasting artifacts.
+The `build:vp` cache uses `input: [{ auto: true }, '!dist/**']` and `output: ['dist/**']` so generated output is not an input and can be restored on cache hits.
+Use `vp run --no-cache ci` for fresh execution.
 
 ## Validation status
 
-Formatting, lint, strict type checking, ESM/declaration builds, and all 44 native tests pass, including both built public package entrypoints.
-The native CI task also passes after removing generated `node_modules/` and `dist/` state, demonstrating frozen-lockfile bootstrap without a globally installed Vite+ CLI.
-Real Docker acceptance passes all six separately registered Vitest cases against the caller-built `e2e-example:local` image.
-The post-suite audits pass for six distinct container identities, no remaining owned scenario or lease containers, and preservation of the caller-owned image ID.
-These observations validate the documented Unix-socket Linux-container baseline; controlled HTTP tests cover TCP transport and cancellation, but real remote TCP or TLS acceptance is not claimed.
+The template-aligned toolchain passes formatting, type-aware lint, strict TypeScript checking, ESM/declaration builds, 43 native tests, and the built-public-entrypoint smoke test.
+Default `vp test run` executes only the 43 native tests, and explicit `--project docker` file collection selects only the Docker suite without executing it.
+The build cache restores byte-identical `dist/` contents after those outputs are moved away.
+The earlier implementation also passed real Docker acceptance of the six registered cases against `e2e-example:local`.
+Those Docker observations validate the Unix-socket Linux-container baseline; controlled HTTP tests cover TCP transport and cancellation, but real remote TCP or TLS acceptance is not claimed.
+Docker acceptance is not rerun as part of toolchain-only validation.

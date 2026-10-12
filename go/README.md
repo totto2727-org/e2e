@@ -114,11 +114,11 @@ if err := environment.CheckCommand(
 
 ### Files
 
-| Method | Behavior |
-| --- | --- |
+| Method                                         | Behavior                                                                                |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `WriteFile(path string, content []byte) error` | Copy exact bytes to a container file with mode `0644`. The parent directory must exist. |
-| `ReadFile(path string) ([]byte, error)` | Copy file bytes from the container for custom assertions. |
-| `CheckFile(path string, want []byte) error` | Copy and compare exact file bytes. |
+| `ReadFile(path string) ([]byte, error)`        | Copy file bytes from the container for custom assertions.                               |
+| `CheckFile(path string, want []byte) error`    | Copy and compare exact file bytes.                                                      |
 
 ```go
 if err := environment.WriteFile("/workspace/result.txt", []byte("done\n")); err != nil {
@@ -135,11 +135,11 @@ The image must provide `test` with `-e`, `-L`, `-f`, and `-d`, plus `readlink` w
 All methods return an error if the asserted state does not match or an infrastructure operation fails.
 Unexpected probe exit codes are errors, not successful absence checks.
 
-| Method | Expected state |
-| --- | --- |
-| `CheckMissing(path)` | No path exists, including no dangling symbolic link. |
-| `CheckRegularFile(path)` | A physical regular file, not a symbolic link to one. |
-| `CheckDirectory(path)` | A physical directory, not a symbolic link to one. |
+| Method                              | Expected state                                                                            |
+| ----------------------------------- | ----------------------------------------------------------------------------------------- |
+| `CheckMissing(path)`                | No path exists, including no dangling symbolic link.                                      |
+| `CheckRegularFile(path)`            | A physical regular file, not a symbolic link to one.                                      |
+| `CheckDirectory(path)`              | A physical directory, not a symbolic link to one.                                         |
 | `CheckSymlink(path, literalTarget)` | A symbolic link with exactly the specified literal target, even if that target is absent. |
 
 `CheckSymlink` does not resolve or normalize the target.
@@ -161,16 +161,16 @@ The Go module moved from the repository root to `go/`.
 Use module path `github.com/totto2727-org/e2e/go` and import path `github.com/totto2727-org/e2e/go/cli` instead of `github.com/totto2727-org/e2e/cli`.
 The previous command and file expectation APIs have been removed, with no deprecation wrappers.
 
-| Removed or changed API | Replacement |
-| --- | --- |
-| `Exec(args)` | `Run(cli.Command{Args: args})`. |
-| `RunSeparated(command)` | `Run(command)`, now always returning separate streams. |
-| `CommandResult` | `Result{ExitCode, Stdout, Stderr}`. |
-| `Run`/`Exec` combined `Result.Stdout` | Assert `Stdout` and `Stderr` independently. Former stdout-followed-by-stderr expectations must explicitly assign each stream; no combined output is supplied. |
-| `CheckStdout(StdoutExpectation{Command, ExitCode, Stdout})` | `CheckCommand(cli.Command{Args: args}, cli.Result{ExitCode: code, Stdout: stdout, Stderr: stderr})`. Specify stderr explicitly, including an intentional empty string. |
-| `CheckCommand(CommandExpectation{Command, ExitCode, Stdout, Stderr})` | `CheckCommand(command, cli.Result{ExitCode: code, Stdout: stdout, Stderr: stderr})`. |
-| `WriteFile(File{Path, Content})` | `WriteFile(path, content)`. |
-| `CheckFile(FileExpectation{Path, Content})` | `CheckFile(path, want)`. |
+| Removed or changed API                                                | Replacement                                                                                                                                                            |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Exec(args)`                                                          | `Run(cli.Command{Args: args})`.                                                                                                                                        |
+| `RunSeparated(command)`                                               | `Run(command)`, now always returning separate streams.                                                                                                                 |
+| `CommandResult`                                                       | `Result{ExitCode, Stdout, Stderr}`.                                                                                                                                    |
+| `Run`/`Exec` combined `Result.Stdout`                                 | Assert `Stdout` and `Stderr` independently. Former stdout-followed-by-stderr expectations must explicitly assign each stream; no combined output is supplied.          |
+| `CheckStdout(StdoutExpectation{Command, ExitCode, Stdout})`           | `CheckCommand(cli.Command{Args: args}, cli.Result{ExitCode: code, Stdout: stdout, Stderr: stderr})`. Specify stderr explicitly, including an intentional empty string. |
+| `CheckCommand(CommandExpectation{Command, ExitCode, Stdout, Stderr})` | `CheckCommand(command, cli.Result{ExitCode: code, Stdout: stdout, Stderr: stderr})`.                                                                                   |
+| `WriteFile(File{Path, Content})`                                      | `WriteFile(path, content)`.                                                                                                                                            |
+| `CheckFile(FileExpectation{Path, Content})`                           | `CheckFile(path, want)`.                                                                                                                                               |
 
 `StdoutExpectation`, `CommandExpectation`, `File`, and `FileExpectation` no longer exist.
 `ReadFile`, physical path assertions, `cli.Run`, and `cli.Case` retain their contracts.
@@ -178,9 +178,19 @@ The previous command and file expectation APIs have been removed, with no deprec
 ## Development
 
 See [AGENTS.md](../AGENTS.md) for repository structure and development commands.
-From the repository root, run Go-only checks with `nix develop --command just go/ci`.
-Run the Go Docker scenarios separately with `nix develop --command just go/e2e`.
-The Go `ci` task runs checks, builds, and reusable race tests without Docker E2E.
+From the repository root, use the cached workspace tasks:
+
+```sh
+pnpm exec vp run @totto2727/e2e-go#check
+pnpm exec vp run @totto2727/e2e-go#build
+pnpm exec vp run @totto2727/e2e-go#test
+pnpm exec vp run @totto2727/e2e-go-example#e2e
+```
+
+The reusable module's native tests run with `go test -race ./...` and do not require Docker.
+The independent example module owns the explicit Docker task and is a separate workspace task node.
+Go 1.25.0 and `.golangci.yml` follow `template/go-simple` unchanged; library builds use `go build ./...` instead of producing a CLI executable.
+For standalone Go work without the JavaScript task runner, `nix develop .#go -c just --justfile go/Justfile ci` runs the same module-local checks, build, and native race tests.
 
 ## License
 

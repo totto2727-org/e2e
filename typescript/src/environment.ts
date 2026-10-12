@@ -22,11 +22,11 @@ export interface PartialResult {
 }
 
 export class ExecutionError extends Error {
-  constructor(
-    readonly partialResult: PartialResult,
-    cause: unknown,
-  ) {
+  readonly partialResult: PartialResult
+
+  constructor(partialResult: PartialResult, cause: unknown) {
     super('Command execution failed', { cause })
+    this.partialResult = partialResult
     this.name = 'ExecutionError'
   }
 }
@@ -60,11 +60,15 @@ export interface Environment {
 }
 
 export class DockerEnvironment implements Environment {
-  constructor(
-    private readonly transport: Transport,
-    private readonly container: string,
-    readonly signal: AbortSignal,
-  ) {}
+  private readonly transport: Transport
+  private readonly container: string
+  readonly signal: AbortSignal
+
+  constructor(transport: Transport, container: string, signal: AbortSignal) {
+    this.transport = transport
+    this.container = container
+    this.signal = signal
+  }
 
   async run(command: Command): Promise<Result> {
     validateCommand(command)

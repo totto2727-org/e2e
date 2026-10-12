@@ -13,7 +13,7 @@ async fn greeting() -> Result<(), Error> {
     run_cases("e2e-example:local", vec![Case::new("greeting", |env| async move {
         let result = env.run(Command::new(["echo", "hello"])).await?;
         assert_eq!(result.exit_code, 0);
-        assert_eq!(std::str::from_utf8(&result.stdout).unwrap(), "hello\n");
+        assert_eq!(result.stdout, b"hello\n");
         assert_eq!(result.stderr, b"");
         env.check_command(Command::new(["true"]), CommandResult::default()).await
     })]).await
@@ -82,13 +82,21 @@ This is local Linux-container acceptance, not a claim of TLS, remote production 
 Run from repository root with the root-owned Rust Nix shell:
 
 ```sh
-nix develop .#rust -c just --justfile rust/Justfile fix
-nix develop .#rust -c just --justfile rust/Justfile ci
+pnpm exec vp run @totto2727/e2e-rust#check
+pnpm exec vp run @totto2727/e2e-rust#build
+pnpm exec vp run @totto2727/e2e-rust#test
 # Root must first build e2e-example:local from go/example/Dockerfile.
-nix develop .#rust -c just --justfile rust/Justfile e2e
+pnpm exec vp run @totto2727/e2e-rust#e2e
 ```
 
 `ci` runs rustfmt, Clippy with warnings denied, build, native tests and the compiled rustdoc example.
+The local Justfile follows `template/rust-simple`, extending Cargo invocations with `--locked` and the explicit ignored acceptance target.
+All build, Clippy, and test commands enable `--all-features`; Clippy also covers `--all-targets`.
+The template's `unsafe_code = "forbid"`, denied `all`/`pedantic`, `unwrap_used`, and `expect_used` lint policies are retained.
+`rust-toolchain.toml` uses the template's stable minimal toolchain with Clippy and rustfmt.
+The crate retains its existing Rust 1.88 minimum rather than lowering it to the CLI template's 1.85.
+Build outputs are in `rust/target/`.
+For standalone Rust work without the JavaScript task runner, use `nix develop .#rust -c just --justfile rust/Justfile ci` and the module-local `fix` task.
 Native tests require no Docker and include binary chunks, exact comparisons, argv validation, archive bytes/mode, cancellation, retained cleanup failures, and a real localhost HTTP upgrade stream proving deadline output capture and socket closure.
 `tests/e2e.rs` is ignored during normal tests and runs only through the explicit `e2e` task against caller-built `e2e-example:local`.
 It covers greeting, multi-command file persistence and byte copy, expected exit `7`, separated streams plus working directory/environment, physical and literal/dangling paths, and the default 60-second command deadline.

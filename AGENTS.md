@@ -17,15 +17,22 @@ Keep language-specific implementation details out of the common contract.
 
 - Run root tasks from the repository root.
 - Enter the toolchain with `nix develop` or select a smaller shell with `nix develop .#go`, `.#haskell`, `.#typescript`, or `.#rust`.
-- Use Just for development entry points and language-local Justfiles for implementation-specific commands.
-- `just fix` formats and autofixes supported implementations.
-- `just check` checks formatting and lint findings.
-- `just build` builds each implementation.
-- `just test` runs tests that do not need Docker.
-- `just ci` runs checks, builds, and unit tests without Docker.
-- `just e2e` is the explicit Docker acceptance entry point.
+- Install the root workspace with `vp install --frozen-lockfile`.
+- Use Vite+ for cross-project dependencies and caching. Keep complex implementation-specific procedures in language-local Justfiles.
+- Put lightweight commands directly in `vite.config.ts`; express multi-stage work with `dependsOn` instead of parallel task-runner hierarchies.
+- `vp run fix` formats and autofixes supported implementations.
+- `vp run check` checks formatting and lint findings.
+- `vp run build` builds each implementation.
+- `vp run test` runs tests that do not need Docker.
+- `vp run ci` runs checks, builds, package validation, and native tests without Docker.
+- `vp run e2e` is the explicit Docker acceptance entry point.
+- Select one workspace task with its package name, such as `vp run @totto2727/e2e-rust#ci`.
+- Keep native-only standalone workflows JavaScript-independent. When a project and every child have no JS dependencies and no useful cache-control need, use native commands for light tasks and local Just recipes for heavy procedures.
+- Keep pure task caching enabled with complete source/configuration inputs and restorable outputs. Disable caching for mutations, image creation, and Docker acceptance.
+- Select native and Docker tests through standard project, suite, package, or ignored-test command options, not environment-dependent discovery.
 - Keep Docker tests out of the aggregate `ci` task.
 - Keep temporary outputs under `tmp/` and do not commit them.
+- Start from the corresponding workspace template and make only necessary library-specific extensions. There is no Haskell template in this workspace.
 
 ## Architecture and invariants
 

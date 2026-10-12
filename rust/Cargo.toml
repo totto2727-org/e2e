@@ -6,6 +6,15 @@ rust-version = "1.88"
 description = "Small async Docker-backed CLI end-to-end test library"
 publish = false
 
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+
 [dependencies]
 bollard = { version = "0.21", default-features = false, features = ["http", "pipe"] }
 bytes = "1"

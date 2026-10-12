@@ -1,0 +1,4 @@
+{
+  "extends": "../../../../../../typescript/tsconfig.json",
+  "include": ["multiple_scenarios.test.ts", "vite.config.ts"]
+}

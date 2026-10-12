@@ -1,0 +1,14 @@
+[package]
+name = "scenario-doc-example"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+cli-e2e = { path = "../../../../../../rust" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[[test]]
+name = "multiple_scenarios"
+path = "multiple_scenarios.rs"

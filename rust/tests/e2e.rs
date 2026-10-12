@@ -13,19 +13,8 @@ fn expected(exit_code: i64, stdout: &str, stderr: &str) -> CommandResult {
         stderr: stderr.as_bytes().to_vec(),
     }
 }
-/// Explicit acceptance only. The root task builds the image before this test.
-#[tokio::test]
-#[ignore = "requires caller-built e2e-example:local and Docker"]
-async fn six_common_cases_preserve_image_and_remove_all_owned_containers() {
-    let docker = Docker::connect_with_defaults()
-        .unwrap()
-        .negotiate_version()
-        .await
-        .unwrap();
-    let image_before = docker.inspect_image("e2e-example:local").await.unwrap().id;
-    let before = owned_containers(&docker).await;
-    let ids = Arc::new(Mutex::new(Vec::new()));
-    let mut cases = vec![
+fn common_cases() -> Vec<Case> {
+    vec![
         Case::new("greeting", |env| async move {
             env.check_command(
                 Command::new(["echo", "hello from e2e"]),
@@ -33,7 +22,7 @@ async fn six_common_cases_preserve_image_and_remove_all_owned_containers() {
             )
             .await?;
             let result = env.run(Command::new(["echo", "UTF-8"])).await?;
-            assert_eq!(std::str::from_utf8(&result.stdout).unwrap(), "UTF-8\n");
+            assert_eq!(result.stdout, b"UTF-8\n");
             Ok(())
         }),
         Case::new("file workflow", |env| async move {
@@ -80,43 +69,7 @@ async fn six_common_cases_preserve_image_and_remove_all_owned_containers() {
             )
             .await
         }),
-        Case::new("physical paths", |env| async move {
-            env.write_file("/workspace/result.txt", b"fixture\n")
-                .await?;
-            for args in [
-                vec!["mkdir", "/workspace/directory"],
-                vec!["ln", "-s", "result.txt", "/workspace/link"],
-                vec!["ln", "-s", "missing.txt", "/workspace/dangling"],
-                vec!["ln", "-s", "directory", "/workspace/directory-link"],
-            ] {
-                env.check_command(Command::new(args), expected(0, "", ""))
-                    .await?;
-            }
-            env.check_regular_file("/workspace/result.txt").await?;
-            env.check_directory("/workspace/directory").await?;
-            env.check_missing("/workspace/missing.txt").await?;
-            env.check_symlink("/workspace/link", "result.txt").await?;
-            env.check_symlink("/workspace/dangling", "missing.txt")
-                .await?;
-            assert!(matches!(
-                env.check_missing("/workspace/dangling").await,
-                Err(Error::Assertion(_))
-            ));
-            assert!(matches!(
-                env.check_regular_file("/workspace/link").await,
-                Err(Error::Assertion(_))
-            ));
-            assert!(matches!(
-                env.check_directory("/workspace/directory-link").await,
-                Err(Error::Assertion(_))
-            ));
-            assert!(matches!(
-                env.check_symlink("/workspace/link", "/workspace/result.txt")
-                    .await,
-                Err(Error::Assertion(_))
-            ));
-            Ok(())
-        }),
+        Case::new("physical paths", physical_paths),
         Case::new("deadline", |env| async move {
             let start = Instant::now();
             assert!(matches!(
@@ -129,33 +82,88 @@ async fn six_common_cases_preserve_image_and_remove_all_owned_containers() {
             assert!(start.elapsed() < Duration::from_secs(70));
             Ok(())
         }),
-    ];
+    ]
+}
+
+async fn physical_paths(env: cli_e2e::Environment) -> Result<(), Error> {
+    env.write_file("/workspace/result.txt", b"fixture\n")
+        .await?;
+    for args in [
+        vec!["mkdir", "/workspace/directory"],
+        vec!["ln", "-s", "result.txt", "/workspace/link"],
+        vec!["ln", "-s", "missing.txt", "/workspace/dangling"],
+        vec!["ln", "-s", "directory", "/workspace/directory-link"],
+    ] {
+        env.check_command(Command::new(args), expected(0, "", ""))
+            .await?;
+    }
+    env.check_regular_file("/workspace/result.txt").await?;
+    env.check_directory("/workspace/directory").await?;
+    env.check_missing("/workspace/missing.txt").await?;
+    env.check_symlink("/workspace/link", "result.txt").await?;
+    env.check_symlink("/workspace/dangling", "missing.txt")
+        .await?;
+    assert!(matches!(
+        env.check_missing("/workspace/dangling").await,
+        Err(Error::Assertion(_))
+    ));
+    assert!(matches!(
+        env.check_regular_file("/workspace/link").await,
+        Err(Error::Assertion(_))
+    ));
+    assert!(matches!(
+        env.check_directory("/workspace/directory-link").await,
+        Err(Error::Assertion(_))
+    ));
+    assert!(matches!(
+        env.check_symlink("/workspace/link", "/workspace/result.txt")
+            .await,
+        Err(Error::Assertion(_))
+    ));
+    Ok(())
+}
+
+/// Explicit acceptance only. The root task builds the image before this test.
+#[tokio::test]
+#[ignore = "requires caller-built e2e-example:local and Docker"]
+async fn six_common_cases_preserve_image_and_remove_all_owned_containers()
+-> Result<(), Box<dyn std::error::Error>> {
+    let docker = Docker::connect_with_defaults()?.negotiate_version().await?;
+    let image_before = docker.inspect_image("e2e-example:local").await?.id;
+    let before = owned_containers(&docker).await?;
+    let ids = Arc::new(Mutex::new(Vec::new()));
+    let mut cases = common_cases();
     // Wrap callbacks to record each identity through the public environment API.
     // The additional two cases explicitly test separate resource identities.
     for name in ["identity a", "identity b"] {
         let ids = ids.clone();
         cases.push(Case::new(name, move |env| async move {
-            ids.lock().unwrap().push(env.container_id().to_owned());
+            ids.lock()
+                .map_err(|error| Error::Assertion(error.to_string()))?
+                .push(env.container_id().to_owned());
             env.check_command(Command::new(["true"]), expected(0, "", ""))
                 .await
         }));
     }
     let result = run_cases("e2e-example:local", cases).await;
     assert_eq!(
-        owned_containers(&docker).await,
+        owned_containers(&docker).await?,
         before,
         "scenario or lease leaked"
     );
     assert_eq!(
-        docker.inspect_image("e2e-example:local").await.unwrap().id,
+        docker.inspect_image("e2e-example:local").await?.id,
         image_before
     );
-    result.unwrap();
-    let ids = ids.lock().unwrap();
+    result?;
+    let ids = ids
+        .lock()
+        .map_err(|error| Error::Assertion(error.to_string()))?;
     assert_eq!(ids.len(), 2);
     assert_ne!(ids[0], ids[1]);
+    Ok(())
 }
-async fn owned_containers(docker: &Docker) -> HashSet<String> {
+async fn owned_containers(docker: &Docker) -> Result<HashSet<String>, Box<dyn std::error::Error>> {
     let filters = std::collections::HashMap::from([(
         "label".to_string(),
         vec!["org.totto2727.e2e.rust.owner".to_string()],
@@ -167,9 +175,10 @@ async fn owned_containers(docker: &Docker) -> HashSet<String> {
                 .filters(&filters)
                 .build(),
         ))
-        .await
-        .unwrap()
+        .await?
         .into_iter()
-        .map(|c| c.id.unwrap())
+        .map(|c| {
+            c.id.ok_or_else(|| "Docker container identity absent".into())
+        })
         .collect()
 }

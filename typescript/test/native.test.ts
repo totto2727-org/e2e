@@ -1,8 +1,8 @@
-import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import { once } from 'node:events'
+import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 
-import { afterEach, describe, expect, test, vi } from 'vitest'
 import tar from 'tar-stream'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { collect, Demultiplexer, DockerError, Engine } from '../src/engine.js'
 import { DockerEnvironment, ExecutionError, type Command, type Environment } from '../src/environment.js'

@@ -2,14 +2,14 @@
 
 ## Responsibility split
 
-| Layer | Responsibility |
-| --- | --- |
-| Just or package task | Build the caller-owned local Docker image before tests. |
-| Test entrypoint | Register named `cli.Case` values and select the prebuilt image. |
-| Scenario file | Create fixtures, invoke the CLI, and assert observable outcomes in Go. |
-| Shared scenario helpers | Wrap `cli.Environment` command/file operations and reusable assertions. |
+| Layer                   | Responsibility                                                                                                 |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Just or package task    | Build the caller-owned local Docker image before tests.                                                        |
+| Test entrypoint         | Register named `cli.Case` values and select the prebuilt image.                                                |
+| Scenario file           | Create fixtures, invoke the CLI, and assert observable outcomes in Go.                                         |
+| Shared scenario helpers | Wrap `cli.Environment` command/file operations and reusable assertions.                                        |
 | `totto2727-org/e2e/cli` | Resolve the local image, retain its immutable ID, and create one disposable Testcontainers container per case. |
-| Sibling Markdown | Explain the executable scenario in English for reviewers. |
+| Sibling Markdown        | Explain the executable scenario in English for reviewers.                                                      |
 
 ## Scenario lifecycle
 

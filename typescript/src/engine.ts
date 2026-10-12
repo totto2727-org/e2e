@@ -1,12 +1,11 @@
 import http, { type IncomingMessage, type RequestOptions } from 'node:http'
 
 export class DockerError extends Error {
-  constructor(
-    message: string,
-    readonly statusCode?: number,
-    options?: ErrorOptions,
-  ) {
+  readonly statusCode: number | undefined
+
+  constructor(message: string, statusCode?: number, options?: ErrorOptions) {
     super(message, options)
+    this.statusCode = statusCode
     this.name = 'DockerError'
   }
 }
@@ -19,10 +18,10 @@ export class Engine implements Transport {
   private readonly options: RequestOptions
 
   constructor(env: NodeJS.ProcessEnv = process.env) {
-    if (env.DOCKER_TLS_VERIFY || env.DOCKER_CERT_PATH) {
+    if (env['DOCKER_TLS_VERIFY'] || env['DOCKER_CERT_PATH']) {
       throw new DockerError('Docker TLS configuration is unsupported')
     }
-    const host = env.DOCKER_HOST ?? 'unix:///var/run/docker.sock'
+    const host = env['DOCKER_HOST'] ?? 'unix:///var/run/docker.sock'
     if (host.startsWith('unix://')) {
       const socketPath = host.slice(7)
       if (!socketPath || socketPath.includes('\0')) throw new DockerError('Invalid Docker Unix socket')
