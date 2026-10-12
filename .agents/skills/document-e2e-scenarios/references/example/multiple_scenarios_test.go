@@ -7,9 +7,13 @@ import (
 )
 
 func TestCLI(t *testing.T) {
-	cli.Run(t, "example-cli:local", []cli.Case{
-		{Name: "prints greeting", Run: printsGreetingScenario},
-		{Name: "returns expected failure", Run: returnsExpectedFailureScenario},
+	t.Run("prints greeting", func(t *testing.T) {
+		t.Parallel()
+		printsGreetingScenario(t, cli.NewEnvironment(t, "example-cli:local"))
+	})
+	t.Run("returns expected failure", func(t *testing.T) {
+		t.Parallel()
+		returnsExpectedFailureScenario(t, cli.NewEnvironment(t, "example-cli:local"))
 	})
 }
 

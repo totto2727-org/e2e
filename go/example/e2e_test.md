@@ -3,9 +3,10 @@
 Source: [e2e_test.go](./e2e_test.go)
 
 This document is for contributors who maintain the Docker-backed acceptance tests.
-Each scenario receives a fresh container from the caller-built `e2e-example:local` image.
+Each standard Go test calls `cli.NewEnvironment(t, "e2e-example:local")` inside its body after `t.Parallel()`, receiving a fresh container and its own immutable image lease.
+The consumer's `go test -parallel=2` setting controls concurrency, not the library.
 
-## `stdoutScenario`
+## `TestStdoutScenario`
 
 ### Scope
 
@@ -42,7 +43,7 @@ Check exact exit status and separate output streams through `CheckCommand`.
 
 - Empty stderr is an intentional exact assertion, not an ignored stream.
 
-## `fileOutputScenario`
+## `TestFileOutputScenario`
 
 ### Scope
 
@@ -93,7 +94,7 @@ Check a file workflow with multiple commands in one container.
 
 - All four commands use `CheckCommand(command, want)` with exact `cli.Result` expectations in the same isolated container.
 
-## `expectedFailureScenario`
+## `TestExpectedFailureScenario`
 
 ### Scope
 
@@ -131,7 +132,7 @@ Check that an expected nonzero command result does not fail the scenario.
 
 - The expected command failure is a passing test result.
 
-## `separatedOutputScenario`
+## `TestSeparatedOutputScenario`
 
 ### Scope
 
@@ -172,7 +173,7 @@ Check native separate output streams, working directory, and environment through
 - Neither API concatenates stdout and stderr.
 - The test does not require chronological ordering between the streams.
 
-## `pathAssertionsScenario`
+## `TestPathAssertionsScenario`
 
 ### Scope
 
@@ -225,7 +226,7 @@ Check physical path types, absent paths, and literal symbolic-link targets.
 - The image must provide `test` and `readlink` with the listed options.
 - No host path is mounted or changed.
 
-## `deadlineScenario`
+## `TestDeadlineScenario`
 
 ### Scope
 
@@ -246,7 +247,7 @@ Check that a command with an open output connection returns when the case deadli
 ### Preconditions and fixtures
 
 - The image contains `sleep` with support for `infinity`.
-- The runner assigns the existing one-minute case budget after the parallel slot is acquired.
+- `cli.NewEnvironment` starts the one-minute invocation budget before image resolution and container setup, after the standard test runner resumes `t.Parallel()`.
 
 ### Execution flow
 
@@ -254,7 +255,7 @@ Check that a command with an open output connection returns when the case deadli
 2. Run argv `["sleep", "infinity"]` through `Run(cli.Command{Args: args})`.
 3. Check the returned error with `errors.Is(err, context.DeadlineExceeded)` without inspecting the unusable exit code.
 4. Check that the elapsed command time is at most 70 seconds.
-5. Return from the callback so the runner can remove the container with a fresh cleanup deadline.
+5. Return from the test so `t.Cleanup` cancels execution, closes the clients, and removes the container and lease with fresh cleanup deadlines.
 
 ### Expected results
 
@@ -266,5 +267,5 @@ Check that a command with an open output connection returns when the case deadli
 
 - The 70-second assertion allows scheduling overhead around the one-minute case budget.
 - Closing an exec connection does not itself signal the process to exit.
-- Container cleanup stops the remaining process after the callback returns, using a fresh 30-second context.
+- Container cleanup stops the remaining process after the test returns, using a fresh 30-second context.
 - This case adds approximately one minute to the Docker-backed test run.

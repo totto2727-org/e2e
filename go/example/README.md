@@ -20,18 +20,19 @@ A successful run reports each case and the overall test as `PASS`.
 
 | Case                       | Assertion                                                                                                                                            |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TestCLI/stdout`           | Exit code `0`, stdout `hello from e2e\n`, and empty stderr through `CheckCommand(command, want)`.                                                    |
-| `TestCLI/file_output`      | Three commands produce `first\nsecond\n`; `CheckFile(path, want)` checks the exact file bytes. All commands have empty stderr.                       |
-| `TestCLI/expected_failure` | Exit code `7`, stdout `expected-failure\n`, and empty stderr are an expected result, not an execution error.                                         |
-| `TestCLI/separated_output` | Both `CheckCommand` and native `Run` return exit code `7` and separate exact stdout/stderr, with the requested working directory and environment.    |
-| `TestCLI/path_assertions`  | `WriteFile(path, content)` creates a fixture; assertions check physical path types, absent paths, dangling links, and literal symbolic-link targets. |
-| `TestCLI/deadline`         | `Run` of `sleep infinity` returns a deadline error within 70 seconds; its exit code is not inspected.                                                |
+| `TestStdoutScenario`           | Exit code `0`, stdout `hello from e2e\n`, and empty stderr through `CheckCommand(command, want)`.                                                    |
+| `TestFileOutputScenario`      | Three commands produce `first\nsecond\n`; `CheckFile(path, want)` checks the exact file bytes. All commands have empty stderr.                       |
+| `TestExpectedFailureScenario` | Exit code `7`, stdout `expected-failure\n`, and empty stderr are an expected result, not an execution error.                                         |
+| `TestSeparatedOutputScenario` | Both `CheckCommand` and native `Run` return exit code `7` and separate exact stdout/stderr, with the requested working directory and environment.    |
+| `TestPathAssertionsScenario`  | `WriteFile(path, content)` creates a fixture; assertions check physical path types, absent paths, dangling links, and literal symbolic-link targets. |
+| `TestDeadlineScenario`         | `Run` of `sleep infinity` returns a deadline error within 70 seconds; its exit code is not inspected.                                                |
 
 Empty stderr expectations are intentional exact checks.
 No case expects combined stdout and stderr.
 The deadline case adds approximately one minute to the run.
-The task permits eight parallel Go tests while the helper limits active cases to two.
-Each case has a one-minute budget and fresh 30-second container cleanup context.
+Each scenario is an ordinary top-level Go test that calls `t.Parallel()` and then `cli.NewEnvironment(t, "e2e-example:local")` inside its body.
+The task explicitly uses Go's `-parallel=2` setting, and the library does not register or schedule tests.
+Each invocation owns a fresh immutable image lease and has a one-minute budget covering image resolution and setup, plus fresh 30-second container and lease cleanup contexts.
 After the tests, the task checks that the caller-owned image remains and no scenario or lease container remains.
 
 See the [sibling scenario document](./e2e_test.md) for the ordered commands, fixtures, and exact results.

@@ -15,110 +15,63 @@ import (
 )
 
 const (
-	maxParallelScenarios     = 2
 	imageLeaseCleanupTimeout = 30 * time.Second
 	containerCleanupTimeout  = 30 * time.Second
 	scenarioTimeout          = time.Minute
 	imageLeaseOwnerLabel     = "io.github.totto2727-org.e2e.image-lease-owner"
 )
 
-type Case struct {
-	Name string
-	Run  func(*testing.T, *Environment)
-}
-
-func Run(t *testing.T, image string, cases []Case) {
+// NewEnvironment prepares an isolated environment for the calling test.
+// Call it inside each Test or t.Run callback, after any caller-owned t.Parallel.
+// The one-minute budget includes setup. Test cleanup cancels execution before
+// closing clients and removing the container and its immutable image lease.
+func NewEnvironment(t *testing.T, image string) *Environment {
 	t.Helper()
-	if err := validateCases(cases); err != nil {
-		t.Fatal(err)
-	}
-	imageID, releaseImage, err := retainLocalImage(t.Context(), image)
+	ctx, cancel := context.WithTimeout(t.Context(), scenarioTimeout)
+	// Register last even when setup calls Fatal: cancellation must precede
+	// client closure, container termination, and image-lease release.
+	defer t.Cleanup(cancel)
+	imageID, releaseImage, err := retainLocalImage(ctx, image)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if releaseErr := releaseImage(); releaseErr != nil {
-			t.Error(releaseErr)
+		if err := releaseImage(); err != nil {
+			t.Error(err)
 		}
 	})
-	slots := make(chan struct{}, maxParallelScenarios)
-	for _, testCase := range cases {
-		t.Run(testCase.Name, func(t *testing.T) {
-			t.Parallel()
-			ctx, cancel, err := acquireScenario(t.Context(), slots, scenarioTimeout)
-			if err != nil {
-				t.Fatal(err)
+	container, err := testcontainers.Run(ctx, imageID)
+	// Run can return a partially created container alongside an error.
+	t.Cleanup(func() {
+		if container != nil {
+			if err := cleanupContainer(container, containerCleanupTimeout); err != nil {
+				t.Error(err)
 			}
-			defer cancel()
-			t.Log("started")
-			t.Cleanup(func() { <-slots })
-			t.Cleanup(func() { t.Logf("completed pass=%t", !t.Failed()) })
-			container, err := testcontainers.Run(ctx, imageID)
-			t.Cleanup(func() {
-				if container != nil {
-					if err := cleanupContainer(container, containerCleanupTimeout); err != nil {
-						t.Error(err)
-					}
-				}
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Logf("container=%s", container.GetContainerID())
-			base, err := testcontainers.NewDockerClientWithOpts(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				if err := base.Close(); err != nil {
-					t.Error(err)
-				}
-			})
-			executor, err := newExecClient(ctx, base.Client)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				if err := executor.Close(); err != nil {
-					t.Error(err)
-				}
-			})
-			testCase.Run(t, &Environment{ctx: ctx, container: &dockerRuntime{DockerContainer: container, executor: executor}})
-		})
-	}
-}
-
-func validateCases(cases []Case) error {
-	names := make(map[string]struct{}, len(cases))
-	for index, testCase := range cases {
-		if testCase.Name == "" {
-			return fmt.Errorf("case %d: name must not be empty", index)
 		}
-		if _, exists := names[testCase.Name]; exists {
-			return fmt.Errorf("case %d: duplicate name %q", index, testCase.Name)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("container=%s", container.GetContainerID())
+	base, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := base.Close(); err != nil {
+			t.Error(err)
 		}
-		if testCase.Run == nil {
-			return fmt.Errorf("case %d %q: callback must not be nil", index, testCase.Name)
+	})
+	executor, err := newExecClient(ctx, base.Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := executor.Close(); err != nil {
+			t.Error(err)
 		}
-		names[testCase.Name] = struct{}{}
-	}
-	return nil
-}
-
-// The scenario budget starts only after a slot is acquired. Queue cancellation
-// follows the parent test, not another scenario's execution budget.
-func acquireScenario(parent context.Context, slots chan struct{}, timeout time.Duration) (context.Context, context.CancelFunc, error) {
-	select {
-	case slots <- struct{}{}:
-	case <-parent.Done():
-		return nil, nil, parent.Err()
-	}
-	if err := parent.Err(); err != nil {
-		<-slots
-		return nil, nil, err
-	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	return ctx, cancel, nil
+	})
+	return &Environment{ctx: ctx, container: &dockerRuntime{DockerContainer: container, executor: executor}}
 }
 
 type terminableContainer interface {

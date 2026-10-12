@@ -23,7 +23,7 @@ Verify that the CLI image can print a caller-visible greeting successfully.
 ### Preconditions and fixtures
 
 - The caller has built the local `example-cli:local` image.
-- `cli.Run` provides a fresh container for this scenario.
+- The ordinary `TestCLI/prints greeting` subtest calls `t.Parallel()` and then `cli.NewEnvironment(t, "example-cli:local")` inside its callback to prepare a fresh container and immutable image lease.
 
 ### Execution flow
 
@@ -65,7 +65,7 @@ Verify that an expected nonzero CLI result remains observable without failing th
 ### Preconditions and fixtures
 
 - The caller has built the local `example-cli:local` image.
-- `cli.Run` provides a different fresh container from `printsGreetingScenario`.
+- The ordinary `TestCLI/returns expected failure` subtest calls `t.Parallel()` and then `cli.NewEnvironment(t, "example-cli:local")` inside its callback to prepare a different fresh container and immutable image lease from `printsGreetingScenario`.
 
 ### Execution flow
 

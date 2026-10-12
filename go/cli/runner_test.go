@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,103 +18,6 @@ import (
 	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
 )
-
-func TestValidateCases(t *testing.T) {
-	action := func(*testing.T, *Environment) {
-		t.Fatal("validation must not invoke a case callback")
-	}
-	for _, test := range []struct {
-		name      string
-		cases     []Case
-		wantError string
-	}{
-		{name: "nil cases"},
-		{name: "empty cases", cases: []Case{}},
-		{name: "one case", cases: []Case{{Name: "first", Run: action}}},
-		{name: "distinct names", cases: []Case{{Name: "first", Run: action}, {Name: "second", Run: action}}},
-		{name: "literal names", cases: []Case{{Name: "First", Run: action}, {Name: "first", Run: action}, {Name: " first ", Run: action}}},
-		{name: "empty name", cases: []Case{{Run: action}}, wantError: "case 0: name must not be empty"},
-		{name: "later empty name", cases: []Case{{Name: "first", Run: action}, {Run: action}}, wantError: "case 1: name must not be empty"},
-		{name: "duplicate name", cases: []Case{{Name: "first", Run: action}, {Name: "first", Run: action}}, wantError: `duplicate name "first"`},
-		{name: "nonadjacent duplicate", cases: []Case{{Name: "first", Run: action}, {Name: "second", Run: action}, {Name: "first", Run: action}}, wantError: `case 2: duplicate name "first"`},
-		{name: "nil callback", cases: []Case{{Name: "first"}}, wantError: `case 0 "first": callback must not be nil`},
-		{name: "later nil callback", cases: []Case{{Name: "first", Run: action}, {Name: "second"}}, wantError: `case 1 "second": callback must not be nil`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			err := validateCases(test.cases)
-			if test.wantError == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), test.wantError) {
-				t.Fatalf("error=%v want containing %q", err, test.wantError)
-			}
-		})
-	}
-}
-
-func TestAcquireScenario_queue_does_not_consume_execution_budget(t *testing.T) {
-	slots := make(chan struct{}, 1)
-	slots <- struct{}{}
-	const budget = 50 * time.Millisecond
-	result := make(chan error, 1)
-	ready := make(chan struct{})
-	go func() {
-		close(ready)
-		ctx, cancel, err := acquireScenario(t.Context(), slots, budget)
-		if err != nil {
-			result <- err
-			return
-		}
-		defer cancel()
-		defer func() { <-slots }()
-		deadline, ok := ctx.Deadline()
-		if !ok || ctx.Err() != nil || time.Until(deadline) < budget/2 {
-			result <- errors.New("queued case did not receive a fresh execution budget")
-			return
-		}
-		result <- nil
-	}()
-	<-ready
-	// Keep the slot occupied longer than the entire execution budget.
-	select {
-	case err := <-result:
-		t.Fatalf("case stopped while waiting for a slot: %v", err)
-	case <-time.After(3 * budget):
-	}
-	<-slots
-	select {
-	case err := <-result:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("queued case did not acquire the released slot")
-	}
-}
-
-func TestAcquireScenario_parent_cancellation_releases_waiter(t *testing.T) {
-	slots := make(chan struct{}, 1)
-	slots <- struct{}{}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, _, err := acquireScenario(ctx, slots, time.Minute)
-	if !errors.Is(err, context.Canceled) || len(slots) != 1 {
-		t.Fatalf("error=%v slots=%d", err, len(slots))
-	}
-}
-
-func TestAcquireScenario_canceled_parent_does_not_hold_available_slot(t *testing.T) {
-	slots := make(chan struct{}, 1)
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, _, err := acquireScenario(ctx, slots, time.Minute)
-	if !errors.Is(err, context.Canceled) || len(slots) != 0 {
-		t.Fatalf("error=%v slots=%d", err, len(slots))
-	}
-}
 
 func TestCleanupContainer_uses_fresh_bounded_context(t *testing.T) {
 	container := &fakeTerminatingContainer{terminate: func(ctx context.Context) error {
@@ -141,6 +46,105 @@ func TestCleanupContainer_preserves_termination_failure(t *testing.T) {
 
 type fakeTerminatingContainer struct {
 	terminate func(context.Context) error
+}
+
+func TestRetainImageLease_each_invocation_owns_its_resolved_image(t *testing.T) {
+	var mu sync.Mutex
+	leases := make(map[string]container.Config)
+	resolved := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/images/image/json"):
+			resolved++
+			if err := json.NewEncoder(w).Encode(map[string]string{"Id": "sha256:image" + strconv.Itoa(resolved)}); err != nil {
+				t.Error(err)
+			}
+		case strings.HasSuffix(request.URL.Path, "/containers/create"):
+			name := request.URL.Query().Get("name")
+			var config container.Config
+			if err := json.NewDecoder(request.Body).Decode(&config); err != nil {
+				t.Error(err)
+				return
+			}
+			if _, exists := leases[name]; exists || name == "" || config.Labels[imageLeaseOwnerLabel] == "" {
+				t.Errorf("lease name=%q reused or missing ownership", name)
+			}
+			leases[name] = config
+			w.WriteHeader(http.StatusCreated)
+			if err := json.NewEncoder(w).Encode(map[string]string{"Id": name}); err != nil {
+				t.Error(err)
+			}
+		case strings.HasSuffix(request.URL.Path, "/json"):
+			name := path.Base(strings.TrimSuffix(request.URL.Path, "/json"))
+			config, exists := leases[name]
+			if !exists {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{"Id": name, "Config": config}); err != nil {
+				t.Error(err)
+			}
+		case request.Method == http.MethodDelete:
+			name := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]
+			if _, exists := leases[name]; !exists {
+				t.Errorf("remove unowned lease %q", name)
+			}
+			delete(leases, name)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", request.Method, request.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	var releases []func() error
+	for index := range 2 {
+		dockerClient, err := client.New(client.WithHost("tcp://"+strings.TrimPrefix(server.URL, "http://")), client.WithAPIVersion("1.54"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		imageID, release, err := retainImageLease(t.Context(), dockerClient, "image")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := release(); err != nil {
+				t.Error(err)
+			}
+		})
+		if want := "sha256:image" + strconv.Itoa(index+1); imageID != want {
+			t.Fatalf("image=%q want=%q", imageID, want)
+		}
+		releases = append(releases, release)
+	}
+	mu.Lock()
+	if resolved != 2 || len(leases) != 2 {
+		t.Errorf("resolutions=%d leases=%d want=2 each", resolved, len(leases))
+	}
+	owners := make(map[string]struct{})
+	for _, config := range leases {
+		owners[config.Labels[imageLeaseOwnerLabel]] = struct{}{}
+	}
+	if len(owners) != 2 {
+		t.Error("invocations shared an ownership token")
+	}
+	mu.Unlock()
+	if err := releases[0](); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(leases) != 1 {
+		t.Fatalf("remaining leases=%d want=1", len(leases))
+	}
+	for _, config := range leases {
+		if config.Image != "sha256:image2" {
+			t.Fatalf("remaining leased image=%q want second immutable ID", config.Image)
+		}
+	}
 }
 
 func TestRetainImageLease_owned_cleanup(t *testing.T) {

@@ -9,19 +9,9 @@ import (
 	"github.com/totto2727-org/e2e/go/cli"
 )
 
-func TestCLI(t *testing.T) {
-	cli.Run(t, "e2e-example:local", []cli.Case{
-		{Name: "stdout", Run: stdoutScenario},
-		{Name: "file_output", Run: fileOutputScenario},
-		{Name: "expected_failure", Run: expectedFailureScenario},
-		{Name: "separated_output", Run: separatedOutputScenario},
-		{Name: "path_assertions", Run: pathAssertionsScenario},
-		{Name: "deadline", Run: deadlineScenario},
-	})
-}
-
-func stdoutScenario(t *testing.T, environment *cli.Environment) {
-	t.Helper()
+func TestStdoutScenario(t *testing.T) {
+	t.Parallel()
+	environment := cli.NewEnvironment(t, "e2e-example:local")
 	if err := environment.CheckCommand(cli.Command{Args: []string{"echo", "hello from e2e"}}, cli.Result{
 		ExitCode: 0,
 		Stdout:   "hello from e2e\n",
@@ -31,8 +21,9 @@ func stdoutScenario(t *testing.T, environment *cli.Environment) {
 	}
 }
 
-func fileOutputScenario(t *testing.T, environment *cli.Environment) {
-	t.Helper()
+func TestFileOutputScenario(t *testing.T) {
+	t.Parallel()
+	environment := cli.NewEnvironment(t, "e2e-example:local")
 	commands := []struct {
 		command cli.Command
 		want    cli.Result
@@ -61,8 +52,9 @@ func fileOutputScenario(t *testing.T, environment *cli.Environment) {
 	}
 }
 
-func expectedFailureScenario(t *testing.T, environment *cli.Environment) {
-	t.Helper()
+func TestExpectedFailureScenario(t *testing.T) {
+	t.Parallel()
+	environment := cli.NewEnvironment(t, "e2e-example:local")
 	if err := environment.CheckCommand(cli.Command{Args: []string{"sh", "-c", "echo expected-failure; exit 7"}}, cli.Result{
 		ExitCode: 7,
 		Stdout:   "expected-failure\n",
@@ -72,8 +64,9 @@ func expectedFailureScenario(t *testing.T, environment *cli.Environment) {
 	}
 }
 
-func separatedOutputScenario(t *testing.T, environment *cli.Environment) {
-	t.Helper()
+func TestSeparatedOutputScenario(t *testing.T) {
+	t.Parallel()
+	environment := cli.NewEnvironment(t, "e2e-example:local")
 	command := cli.Command{
 		Args:       []string{"sh", "-c", `printf '%s:%s\n' "$HOME" "$PWD"; printf 'diagnostic\n' >&2; exit 7`},
 		WorkingDir: "/workspace",
@@ -96,8 +89,9 @@ func separatedOutputScenario(t *testing.T, environment *cli.Environment) {
 	}
 }
 
-func pathAssertionsScenario(t *testing.T, environment *cli.Environment) {
-	t.Helper()
+func TestPathAssertionsScenario(t *testing.T) {
+	t.Parallel()
+	environment := cli.NewEnvironment(t, "e2e-example:local")
 	if err := environment.WriteFile("/workspace/result.txt", []byte("fixture\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -136,8 +130,9 @@ func pathAssertionsScenario(t *testing.T, environment *cli.Environment) {
 	}
 }
 
-func deadlineScenario(t *testing.T, environment *cli.Environment) {
-	t.Helper()
+func TestDeadlineScenario(t *testing.T) {
+	t.Parallel()
+	environment := cli.NewEnvironment(t, "e2e-example:local")
 	started := time.Now()
 	_, err := environment.Run(cli.Command{Args: []string{"sleep", "infinity"}})
 	if !errors.Is(err, context.DeadlineExceeded) {
