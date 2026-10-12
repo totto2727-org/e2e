@@ -128,7 +128,8 @@ The package task graph uses direct base tasks for single commands and subdivides
 `ci` depends on `check`, `test`, and `postbuild`, never Docker acceptance.
 `fix` disables caching because it mutates source files, and `e2e` disables caching because it observes Docker.
 The remaining tasks retain caching; `check`, `test:vitest`, `test:vitest-package`, and `postbuild` declare `output: []` because checks, tests, and a package dry-run do not produce lasting artifacts.
-The `build` cache uses `input: [{ auto: true }, '!dist/**']` and `output: ['dist/**']` so generated output is not an input and can be restored on cache hits.
+The `build` cache uses automatic input tracking and `output: ['dist/**']`. Public build checks confirmed that changing a generated file or moving `dist/` away leaves a cache hit and restores byte-identical output without a manual `!dist/**` input rule.
+Formatter and linter blocks are shared from the repository root and derive their exclusions from `.gitignore` with `@totto2727/gitignore-patterns`.
 Use `vp run --no-cache ci` for fresh execution.
 
 ## Validation status
@@ -138,4 +139,4 @@ Default `vp test run` executes only the 43 native tests, and explicit `--project
 The build cache restores byte-identical `dist/` contents after those outputs are moved away.
 The earlier implementation also passed real Docker acceptance of the six registered cases against `e2e-example:local`.
 Those Docker observations validate the Unix-socket Linux-container baseline; controlled HTTP tests cover TCP transport and cancellation, but real remote TCP or TLS acceptance is not claimed.
-Docker acceptance is not rerun as part of toolchain-only validation.
+Docker acceptance remains separate from the normal `ci` task.
