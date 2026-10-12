@@ -18,9 +18,14 @@ export default defineConfig({
   lint: { options: { typeAware: true, typeCheck: true }, ignorePatterns },
   run: {
     tasks: {
-      'check:vp': { command: 'vp check', cache: { output: [] } },
+      // Root lint includes the documentation consumer of the built public exports.
+      'check:vp': { command: 'vp check', dependsOn: ['@totto2727/e2e-cli#build'], cache: { output: [] } },
       'check:nixfmt': { command: 'nixfmt --check flake.nix', cache: { output: [] } },
-      'fix:vp': { command: 'vp check --fix', dependsOn: ['@totto2727/e2e-cli#fix'], cache: false },
+      'fix:vp': {
+        command: 'vp check --fix',
+        dependsOn: ['@totto2727/e2e-cli#fix'],
+        cache: false,
+      },
       'fix:nixfmt': { command: 'nixfmt flake.nix', cache: false },
       check: {
         command: '',

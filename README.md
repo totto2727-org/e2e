@@ -129,6 +129,7 @@ The root configuration owns both blocks, so commands from the TypeScript package
 The helper's root-anchored literals are not cache-input globs, and Vite+ cache inputs do not automatically exclude Gitignored files.
 The TypeScript build uses automatic input tracking and declares `dist/**` as its restorable output; changing or removing those generated files does not require a parallel manual exclusion list.
 Tests that import the built package still track `dist/` as an input through their build dependency; do not exclude it from those consumers.
+Root static checks also depend on the TypeScript build because they inspect the documentation sample's public imports; a clean checkout must not rely on pre-existing declarations in `dist/`.
 Individual exclusions require evidence of a helper limitation or missing cache-input coverage.
 For example, `nix develop -c vp run @totto2727/e2e-rust#ci` selects only the Rust task graph.
 The native libraries remain usable without JavaScript: `nix develop .#rust -c bash -c 'cd rust && just ci'` runs the standalone Rust template commands.

@@ -28,7 +28,8 @@ export default defineConfig({
       check: { command: 'vp check', cache: { output: [] } },
       ci: { command: '', dependsOn: ['check', 'test', 'postbuild'] },
       e2e: { command: 'vp test run --project docker', cache: false },
-      fix: { command: 'vp check --fix', cache: false },
+      // Generate the shared public declarations before fixers start writing sources.
+      fix: { command: 'vp check --fix', dependsOn: ['build'], cache: false },
       postbuild: { command: 'vp pm pack -- --dry-run', dependsOn: ['build'], cache: { output: [] } },
       test: { command: '', dependsOn: ['test:vitest', 'test:vitest-package'] },
       'test:vitest': { command: 'vp test run --project native', cache: { output: [] } },
