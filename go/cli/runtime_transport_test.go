@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -225,7 +226,9 @@ func execTransportHandler(t *testing.T, cancelStream bool) (http.Handler, <-chan
 					t.Error(err)
 					return
 				}
-				if _, err := connection.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+				// A canceled peer can close gracefully or reset unread socket data.
+				// Both prove closure; a read deadline or any other error still fails.
+				if _, err := connection.Read(make([]byte, 1)); !errors.Is(err, io.EOF) && !errors.Is(err, syscall.ECONNRESET) {
 					t.Errorf("canceled attach connection: %v", err)
 				}
 				return
