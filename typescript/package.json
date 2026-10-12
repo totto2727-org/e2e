@@ -12,10 +12,6 @@
     ".": {
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
-    },
-    "./vitest": {
-      "types": "./dist/vitest.d.mts",
-      "import": "./dist/vitest.mjs"
     }
   },
   "dependencies": {
@@ -27,15 +23,8 @@
     "@types/node": "^24.19.1",
     "@types/tar-stream": "^3.1.5",
     "typescript": "^7.0.2",
-    "vite-plus": "catalog:"
-  },
-  "peerDependencies": {
+    "vite-plus": "catalog:",
     "vitest": "^5.0.3"
-  },
-  "peerDependenciesMeta": {
-    "vitest": {
-      "optional": true
-    }
   },
   "engines": {
     "node": ">=24"

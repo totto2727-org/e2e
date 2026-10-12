@@ -12,37 +12,32 @@ The library inspects the local image and does not build, pull, or remove images.
 
 ```haskell
 {-# LANGUAGE OverloadedStrings #-}
-import Control.Exception (throwIO)
-import Control.Monad (forM_)
 import Test.Hspec
 import Test.CLI.E2E
 
 main :: IO ()
-main = do
-  results <- runCases "e2e-example:local"
-    [ Case "greeting" $ \environment ->
-        checkCommand environment
-          (Command ["echo", "hello from e2e"] Nothing [])
-          (Result 0 "hello from e2e\n" "")
-    ]
-  hspec $ forM_ results $ \result ->
-    it (caseName result) (either throwIO pure (outcome result))
+main = hspec $ do
+  it "greeting" $
+    withEnvironment "e2e-example:local" $ \environment ->
+      checkCommand environment
+        (Command ["echo", "hello from e2e"] Nothing [])
+        (Result 0 "hello from e2e\n" "")
 ```
 
-Each action has its own named outcome.
-`runCases` returns outcomes in input order after all case containers and the shared stopped image lease have been removed.
-An image setup error or lease cleanup error throws from `runCases`.
-A case error is stored in `outcome :: Either SomeException ()` so that one failed case does not hide other outcomes.
-The Hspec examples above report each case independently.
+Each standard Hspec `it` invokes `withEnvironment` only when the framework selects and executes it.
+Hspec owns example names, filtering, reporting, fail-fast behavior, and scheduling.
+Use `--match greeting` to execute only matching examples and `--dry-run` to list them without contacting Docker.
+For suites whose examples can run concurrently, use Hspec's `parallel` and `--jobs N` controls rather than a library-owned gate.
+The acceptance suite stays sequential because its per-example label-set audits assume exclusive ownership during each snapshot window.
+There is no `Case`, outcome list, shared runner, or `beforeAll` batch of hidden actions.
+Each helper invocation resolves its own local immutable image ID, retains it with a stopped lease, creates one fresh running container, and removes both before returning the callback value or rethrowing its exception.
 Case actions can use Hspec assertions directly.
-The actions run before Hspec reports their collected outcomes, so Hspec filters do not select actions in this example.
-Select the `Case` list before `runCases` when you need to run only some actions.
 
 ## Values and operations
 
 | Value or operation           | Haskell API                                                                 |
 | ---------------------------- | --------------------------------------------------------------------------- |
-| Case                         | `Case { name :: String, action :: Environment -> IO () }`                   |
+| Scoped lifecycle             | `withEnvironment :: String -> (Environment -> IO a) -> IO a`                |
 | Command                      | `Command { args :: [String], workingDir :: Maybe String, env :: [String] }` |
 | Result                       | `Result { exitCode :: Int, stdout :: ByteString, stderr :: ByteString }`    |
 | Execute                      | `run :: Environment -> Command -> IO Result`                                |
@@ -92,19 +87,21 @@ The library throws the typed `E2EError` exception for invalid input, protocol er
 `DeadlineExceeded output` preserves bytes captured before timeout, including an incomplete frame payload when available.
 Neither error carries an exit code.
 A successful exec inspection is required before `Result` can be returned.
-`CleanupFailed cleanupCause originalCause` preserves a cleanup error and any earlier case error.
-Caller exceptions remain available through `SomeException` in the named outcome.
+`CleanupFailed cleanupCause Nothing` reports failed cleanup when the callback otherwise succeeded.
+If the callback or startup failed, that original exception is rethrown unchanged after attempting both container and lease cleanup, even if cleanup also failed.
+This preserves Hspec assertion metadata and asynchronous exception identity rather than wrapping or collecting them.
+In that dual-failure case the original exception takes precedence.
+The secondary cleanup error is reported to host stderr with a best-effort, one-second-bounded diagnostic that cannot replace the original exception.
 
-At most two cases hold slots concurrently.
-Each case starts an absolute 60-second budget after it acquires a slot.
-The budget includes container creation, startup, commands, and file operations.
-Queued cases do not spend that budget.
-Each cleanup gets one fresh 30-second budget for inspection and removal, independent of the case deadline.
-The slot remains held until cleanup finishes.
-Image inspection and lease creation share a separate 60-second setup budget.
+The library has no concurrency limit or scheduling queue.
+Each invocation starts one absolute 60-second operation budget before image inspection, lease creation, and fresh container creation.
+Commands and file operations share the remaining budget, rather than receiving new per-operation timeouts.
+Framework-queued examples have not invoked the helper and therefore spend none of that budget.
+Each owned resource cleanup gets one fresh 30-second total budget for inspection and removal, independent of the operation deadline.
+The helper does not finish until cleanup of both resources has been attempted.
 
 Library operations use `System.Timeout` and close owned HTTP responses when interrupted.
-Asynchronous cancellation propagates after cleanup rather than becoming a successful case outcome.
+Asynchronous cancellation propagates after cleanup rather than becoming a successful callback result.
 Raw owner cancellation preserves the original asynchronous exception, such as `ThreadKilled` or `AsyncCancelled`.
 That exception does not carry captured output and the cancelled owner receives no `Result`.
 This differs from deadline and synchronous execution errors, which carry `Output`.
@@ -113,7 +110,7 @@ For example, a case action that waits forever without calling the library will w
 Do not use `uninterruptibleMask` around library calls.
 Closing an exec connection does not prove that the remote process stopped; container removal is the final process boundary.
 
-The runner generates a 192-bit ownership token from `/dev/urandom` before sending container creation requests.
+The helper generates a 192-bit ownership token from `/dev/urandom` before sending container creation requests.
 Cleanup inspects the unique name, verifies `org.e2e.haskell.owner`, and removes the matching immutable container ID.
 It never deletes the caller's image.
 A daemon can finish a create request after a disconnected client has completed its cleanup inspection.
@@ -160,7 +157,8 @@ Consumers can add this directory as a local Cabal package.
 For example, run `cabal build --offline --builddir=tmp/cabal lib:cli-e2e` from `haskell/` within the Nix shell.
 Normal `cabal test native` does not require Docker.
 The `docker-e2e` suite is disabled unless `-fdocker-e2e` is supplied explicitly.
-The task commands select `test:native` or `-fdocker-e2e test:docker-e2e` before execution, without an environment switch or post-execution Hspec `--match` filtering.
+The task commands select `test:native` or `-fdocker-e2e test:docker-e2e` before execution.
+Within a selected suite Hspec `--match` filters actual example execution and does not merely filter already-collected outcomes.
 
 After the caller builds `e2e-example:local`, run the separate Docker task:
 
@@ -169,5 +167,5 @@ pnpm exec vp run @totto2727/e2e-haskell#e2e
 ```
 
 This task does not build or pull an image.
-It runs the [six common acceptance scenarios](e2e/Spec.md), then checks distinct container IDs, removed case and lease containers, and an unchanged image ID.
+It runs the [six common acceptance scenarios](e2e/Spec.md) as direct Hspec examples, checking each example's fresh container identity, removed case and lease containers, and unchanged image ID.
 The native suite is transport evidence, not Docker acceptance.

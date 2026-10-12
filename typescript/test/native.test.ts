@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { collect, Demultiplexer, DockerError, Engine } from '../src/engine.js'
 import { DockerEnvironment, ExecutionError, type Command, type Environment } from '../src/environment.js'
-import { DeadlineError, Suite, validateCases } from '../src/runner.js'
+import { DeadlineError, Lifecycle } from '../src/runner.js'
 
 const disposals: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -215,7 +215,8 @@ describe('HTTP cancellation and endpoint configuration', () => {
 })
 
 async function lifecycle(fail?: 'create' | 'start' | 'cleanup'): Promise<{
-  suite: Suite
+  lifecycle: Lifecycle
+  engine: Engine
   owned: Map<string, { Id: string; Config: { Labels: Record<string, string> } }>
   images: string[]
 }> {
@@ -248,79 +249,110 @@ async function lifecycle(fail?: 'create' | 'start' | 'cleanup'): Promise<{
       } else reply(res, value)
     }
   })
-  const suite = new Suite(engine)
-  await suite.open('caller:local')
-  return { suite, owned, images }
+  return { lifecycle: new Lifecycle(engine), engine, owned, images }
 }
 
 describe('Container ownership and lifecycle', () => {
-  test('rejects duplicate or empty case names before setup', () => {
-    const run = async () => {}
-    expect(() => validateCases([{ name: '', run }])).toThrow(TypeError)
-    expect(() =>
-      validateCases([
-        { name: 'same', run },
-        { name: 'same', run },
-      ]),
-    ).toThrow(TypeError)
+  test.each(['create', 'start'] as const)('cleans partial %s failures and the image lease', async (failure) => {
+    const { lifecycle: scope, owned, images } = await lifecycle(failure)
+    await expect(scope.run('caller:local', async () => {})).rejects.toThrow(DockerError)
+    expect(owned.size).toBe(0)
+    expect(images).toEqual(['sha256:local', 'sha256:local'])
   })
-  test.each(['create', 'start'] as const)(
-    'cleans partial %s failures using pre-acquired ownership',
-    async (failure) => {
-      const { suite, owned, images } = await lifecycle(failure)
-      await expect(suite.run(async () => {})).rejects.toThrow(DockerError)
-      expect(owned.size).toBe(1)
-      await suite.close()
+  test('returns arbitrary callback results after cleanup and closes its signal', async () => {
+    const { lifecycle: scope, owned } = await lifecycle()
+    const result = { value: 42 }
+    let signal!: AbortSignal
+    await expect(
+      scope.run('caller:local', async (env) => {
+        signal = env.signal
+        expect(owned.size).toBe(2)
+        return result
+      }),
+    ).resolves.toBe(result)
+    expect(owned.size).toBe(0)
+    expect(signal.aborted).toBe(true)
+  })
+  test.each([new Error('assertion failure'), 'arbitrary failure', undefined])(
+    'preserves callback rejection identity: %j',
+    async (error) => {
+      const { lifecycle: scope, owned } = await lifecycle()
+      await expect(
+        scope.run('caller:local', async () => {
+          throw error
+        }),
+      ).rejects.toBe(error)
       expect(owned.size).toBe(0)
-      expect(images).toEqual(['sha256:local', 'sha256:local'])
     },
   )
-  test('reports cleanup failure and still releases the slot', async () => {
-    const { suite, owned } = await lifecycle('cleanup')
-    for (let i = 0; i < 3; i++) await expect(suite.run(async () => {})).rejects.toThrow(DockerError)
-    expect(owned.size).toBe(4)
-    await suite.close()
-  })
-  test('starts budgets only after one of two slots is acquired', async () => {
-    const { suite, owned } = await lifecycle()
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    const controllers = [new AbortController(), new AbortController()]
-    let entered = 0
-    let both!: () => void
-    const started = new Promise<void>((resolve) => {
-      both = resolve
-    })
-    const blocking = async (env: Environment) => {
-      entered++
-      if (entered === 2) both()
-      await once(env.signal, 'abort')
-    }
-    const first = suite.run(blocking, controllers[0]!.signal)
-    const second = suite.run(blocking, controllers[1]!.signal)
-    await started
-    const third = suite.run(async (env) => {
-      vi.advanceTimersByTime(2_000)
-      expect(env.signal.aborted).toBe(false)
-    })
-    vi.advanceTimersByTime(59_000)
-    expect(owned.size).toBe(3)
-    controllers[0]!.abort()
-    controllers[1]!.abort()
-    await Promise.all([first, second, third])
+  test('reports cleanup failure but still removes the lease', async () => {
+    const { lifecycle: scope, owned } = await lifecycle('cleanup')
+    await expect(scope.run('caller:local', async () => {})).rejects.toThrow(DockerError)
     expect(owned.size).toBe(1)
-    await suite.close()
+    expect([...owned.values()].map((value) => value.Id)).toEqual(['id-2'])
+  })
+  test('retains callback and cleanup failures together', async () => {
+    const { lifecycle: scope } = await lifecycle('cleanup')
+    const failure = new Error('callback failed')
+    await expect(
+      scope.run('caller:local', async () => {
+        throw failure
+      }),
+    ).rejects.toMatchObject({
+      errors: [failure, expect.any(DockerError)],
+    })
+  })
+  test('lets the consumer start more than two independent scopes without a queue', async () => {
+    const { lifecycle: scope, owned, images } = await lifecycle()
+    let entered = 0
+    let ready!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      ready = resolve
+    })
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const executions = Array.from({ length: 3 }, () =>
+      scope.run('caller:local', async () => {
+        if (++entered === 3) ready()
+        await waiting
+      }),
+    )
+    await started
+    expect(owned.size).toBe(6)
+    expect(images).toEqual(Array<string>(6).fill('sha256:local'))
+    release()
+    await Promise.all(executions)
+    expect(owned.size).toBe(0)
+  })
+  test('cancellation reaches callback code and cleanup has a fresh signal', async () => {
+    const { lifecycle: scope, owned } = await lifecycle()
+    const parent = new AbortController()
+    const reason = new Error('cancelled by test')
+    await expect(
+      scope.run(
+        'caller:local',
+        async (env) => {
+          parent.abort(reason)
+          expect(env.signal.reason).toBe(reason)
+          env.signal.throwIfAborted()
+        },
+        parent.signal,
+      ),
+    ).rejects.toBe(reason)
     expect(owned.size).toBe(0)
   })
 })
 
-test('the default deadline cancels case operations and uses an independent cleanup budget', async () => {
-  const { suite, owned } = await lifecycle()
+test('the default deadline cancels operations and uses an independent cleanup budget', async () => {
+  const { lifecycle: scope, owned } = await lifecycle()
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   let started!: () => void
   const ready = new Promise<void>((resolve) => {
     started = resolve
   })
-  const execution = suite.run(async (env) => {
+  const execution = scope.run('caller:local', async (env) => {
     started()
     await once(env.signal, 'abort')
     env.signal.throwIfAborted()
@@ -329,8 +361,6 @@ test('the default deadline cancels case operations and uses an independent clean
   await ready
   vi.advanceTimersByTime(60_000)
   await assertion
-  expect(owned.size).toBe(1)
-  await suite.close()
   expect(owned.size).toBe(0)
 })
 
@@ -340,8 +370,68 @@ test('a missing local image fails without creating or pulling anything', async (
     requests.push(req.url ?? '')
     reply(res, {}, 404)
   })
-  await expect(new Suite(engine).open('missing:local')).rejects.toMatchObject({ statusCode: 404 })
+  await expect(new Lifecycle(engine).run('missing:local', async () => {})).rejects.toMatchObject({ statusCode: 404 })
   expect(requests).toEqual(['/images/missing%3Alocal/json'])
+})
+
+test('a pre-cancelled invocation never contacts Docker', async () => {
+  const reason = new Error('test cancelled before setup')
+  const request = vi.fn(() => {
+    throw new Error('Docker must not be contacted')
+  })
+  await expect(new Lifecycle({ request }).run('local', async () => {}, AbortSignal.abort(reason))).rejects.toBe(reason)
+  expect(request).not.toHaveBeenCalled()
+})
+
+test('the operation budget includes image inspection before any container exists', async () => {
+  let received!: () => void
+  const ready = new Promise<void>((resolve) => {
+    received = resolve
+  })
+  const engine = await server(() => received())
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const assertion = expect(new Lifecycle(engine).run('local', async () => {})).rejects.toBeInstanceOf(DeadlineError)
+  await ready
+  vi.advanceTimersByTime(60_000)
+  await assertion
+})
+
+test('each cleanup stage has a fresh budget even after case removal times out', async () => {
+  const { lifecycle: scope, owned, engine } = await lifecycle()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const original = engine.request.bind(engine)
+  let removing!: () => void
+  const ready = new Promise<void>((resolve) => {
+    removing = resolve
+  })
+  const spy = vi.spyOn(engine, 'request').mockImplementation(async (method, path, signal, body) => {
+    if (method === 'DELETE' && owned.get(path.split('/')[2]!.split('?')[0]!)?.Id === 'id-2') {
+      removing()
+      await once(signal, 'abort')
+      signal.throwIfAborted()
+    }
+    return original(method, path, signal, body)
+  })
+  try {
+    const assertion = expect(scope.run('local', async () => {})).rejects.toBeInstanceOf(DeadlineError)
+    await ready
+    vi.advanceTimersByTime(30_000)
+    await assertion
+    expect([...owned.values()].map((value) => value.Id)).toEqual(['id-2'])
+  } finally {
+    spy.mockRestore()
+  }
+})
+
+test('refuses unowned case removal and still releases its matching lease', async () => {
+  const { lifecycle: scope, owned } = await lifecycle()
+  await expect(
+    scope.run('local', async () => {
+      const container = [...owned.values()].find((value) => value.Id === 'id-2')!
+      container.Config.Labels = {}
+    }),
+  ).rejects.toThrow('Refusing to remove unowned container')
+  expect([...owned.values()].map((value) => value.Id)).toEqual(['id-2'])
 })
 
 test('an unexpected HTTP 101 upgrade rejects instead of leaving an owned connection', async () => {

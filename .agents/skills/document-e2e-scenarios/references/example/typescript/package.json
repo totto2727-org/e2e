@@ -6,6 +6,7 @@
   "devDependencies": {
     "@totto2727/e2e-cli": "workspace:*",
     "typescript": "^7.0.2",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "^5.0.3"
   }
 }

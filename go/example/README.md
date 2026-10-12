@@ -18,14 +18,14 @@ pnpm exec vp run @totto2727/e2e-go-example#e2e
 The task builds `e2e-example:local`, runs the six cases with the race detector and shuffled order, and checks cleanup.
 A successful run reports each case and the overall test as `PASS`.
 
-| Case                       | Assertion                                                                                                                                            |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TestStdoutScenario`           | Exit code `0`, stdout `hello from e2e\n`, and empty stderr through `CheckCommand(command, want)`.                                                    |
+| Case                          | Assertion                                                                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TestStdoutScenario`          | Exit code `0`, stdout `hello from e2e\n`, and empty stderr through `CheckCommand(command, want)`.                                                    |
 | `TestFileOutputScenario`      | Three commands produce `first\nsecond\n`; `CheckFile(path, want)` checks the exact file bytes. All commands have empty stderr.                       |
 | `TestExpectedFailureScenario` | Exit code `7`, stdout `expected-failure\n`, and empty stderr are an expected result, not an execution error.                                         |
 | `TestSeparatedOutputScenario` | Both `CheckCommand` and native `Run` return exit code `7` and separate exact stdout/stderr, with the requested working directory and environment.    |
 | `TestPathAssertionsScenario`  | `WriteFile(path, content)` creates a fixture; assertions check physical path types, absent paths, dangling links, and literal symbolic-link targets. |
-| `TestDeadlineScenario`         | `Run` of `sleep infinity` returns a deadline error within 70 seconds; its exit code is not inspected.                                                |
+| `TestDeadlineScenario`        | `Run` of `sleep infinity` returns a deadline error within 70 seconds; its exit code is not inspected.                                                |
 
 Empty stderr expectations are intentional exact checks.
 No case expects combined stdout and stderr.

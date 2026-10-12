@@ -13,12 +13,12 @@ A container is not a shell abstraction: commands are argv entries, and shell syn
 
 ## Implementations
 
-| Language   | Implementation and API                         | Framework      | Shared API   | Native checks                            | Docker acceptance        |
-| ---------- | ---------------------------------------------- | -------------- | ------------ | ---------------------------------------- | ------------------------ |
-| Go         | [go/README.md](./go/README.md)                 | `testing`      | Implemented. | Passed, including race tests.            | Six common cases passed. |
-| Haskell    | [haskell/README.md](./haskell/README.md)       | Hspec outcomes | Implemented. | Passed, including a Cabal library build. | Six common cases passed. |
-| TypeScript | [typescript/README.md](./typescript/README.md) | Vitest         | Implemented. | Passed, including built package imports. | Six common cases passed. |
-| Rust       | [rust/README.md](./rust/README.md)             | Tokio tests    | Implemented. | Passed, including Clippy and rustdoc.    | Six common cases passed. |
+| Language   | Implementation and API                         | Framework   | Shared API   | Native checks                            | Docker acceptance        |
+| ---------- | ---------------------------------------------- | ----------- | ------------ | ---------------------------------------- | ------------------------ |
+| Go         | [go/README.md](./go/README.md)                 | `testing`   | Implemented. | Passed, including race tests.            | Six common cases passed. |
+| Haskell    | [haskell/README.md](./haskell/README.md)       | Hspec       | Implemented. | Passed, including a Cabal library build. | Six common cases passed. |
+| TypeScript | [typescript/README.md](./typescript/README.md) | Vitest      | Implemented. | Passed, including built package imports. | Six common cases passed. |
+| Rust       | [rust/README.md](./rust/README.md)             | Tokio tests | Implemented. | Passed, including Clippy and rustdoc.    | Six common cases passed. |
 
 Each shared API includes command execution, exact assertions, byte file transfer, physical path checks, isolated cases, deadlines, and owned-resource cleanup.
 Docker acceptance uses a local Linux-container Engine over a Unix socket and verifies cleanup and image preservation. A controlled transport test is not Docker acceptance.
@@ -36,14 +36,14 @@ Use the language READMEs for cancellation boundaries, non-UTF-8 handling, and co
 
 ## Shared values
 
-- **Case**: a unique name and an action that receives an isolated environment.
+- **Test scope**: a lifetime owned by one ordinary test body. The framework owns naming, discovery, selection, assertions, scheduling, and reporting. The library does not register tests or aggregate outcomes.
 - **Command**: nonempty argv with a nonempty executable, an optional working directory, and optional environment entries. Preserve argument boundaries, empty argument values, and environment values. Reject NUL in argv, working directory, and environment entries before execution.
 - **Result**: exit code, stdout, and stderr. Keep both output streams separate and preserve valid UTF-8 command text unchanged. Preserve ordering within each stream, but do not promise ordering between streams. Languages may expose text or bytes; their READMEs define non-UTF-8 handling. File APIs always transfer exact bytes.
 - **Environment**: the case-owned command and file operations. Do not expose a mutable Docker client as a public escape hatch.
 
 A nonzero application exit code is a command result, not an infrastructure error.
 Daemon failures, failure to attach, output decode errors, cancellation, and deadline expiry are errors. An exit code is valid only after successful execution and inspection.
-Command results and execution errors delivered by the command API retain output already captured. Cancelling or abandoning the whole runner may instead propagate framework cancellation without delivering a command outcome. Each language README explains that boundary and its error representation.
+Command results and execution errors delivered by the command API retain output already captured. Cancelling or abandoning the whole test scope may instead propagate framework cancellation without delivering a command outcome. Each language README explains that boundary and its error representation.
 Never infer application exit status solely from the host `docker exec` process: its failure can instead be a Docker error.
 
 ## Shared operations
@@ -52,7 +52,7 @@ Names below identify behaviors, not mandatory spellings in every language.
 
 | Operation           | Contract                                                                                                                                                              |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Run cases           | Resolve a local prebuilt image once and run each case in a fresh container.                                                                                           |
+| With environment    | Resolve a local prebuilt image and provide a fresh container inside an ordinary test. Complete owned-resource cleanup at scope exit.                                  |
 | Run command         | Execute a `Command` and return a separate-stream `Result`.                                                                                                            |
 | Check command       | Execute a command and compare its exit code, stdout, and stderr exactly against an expected `Result`. An empty expected stream asserts absence, not an ignored field. |
 | Write file          | Copy exact bytes to a container path with mode `0644`. The parent directory must exist.                                                                               |
@@ -68,14 +68,18 @@ Probe exit codes other than `0` or `1` are infrastructure errors, not successful
 
 ## Container lifecycle and deadlines
 
-1. Inspect the caller's local image. Fail if it is absent, without pulling it.
-2. Resolve the immutable image ID and create a stopped lease container from that ID. Do not delete the image.
-3. Acquire a case slot. At most two cases may own slots concurrently; queued cases have not started their execution budget.
-4. Start a one-minute case budget, including container creation and startup. Create a fresh container from the resolved image ID and preserve its image entrypoint.
+1. Call the scoped helper inside an ordinary test. Start its one-minute operation budget and inspect the caller's local image. Fail if it is absent, without pulling it.
+2. Resolve the immutable image ID and create a stopped lease container from that ID for this scope. Do not delete the image.
+3. Let the framework control concurrency. The library does not queue tests, impose a suite-wide parallel limit, register names, or collect outcomes.
+4. Create a fresh container from the resolved image ID within the same operation budget and preserve its image entrypoint.
 5. Register cleanup immediately when ownership is acquired, including partial startup failures. Do not let a command connection outlive its case.
 6. Execute all case operations against that case's deadline. Deadline expiry or cancellation must unblock output reads and release their owned connections.
-7. On completion, failure, or cancellation, remove the case container using a fresh 30-second cleanup budget independent of the case deadline. Release its slot only after cleanup.
-8. After all cases finish, remove the stopped lease with its own fresh 30-second budget. Preserve the caller-owned image.
+7. On completion, failure, or cancellation, remove the case container using a fresh 30-second cleanup budget independent of the case deadline.
+8. Remove this scope's stopped lease with its own fresh 30-second budget. Preserve the caller-owned image.
+
+Use `testing.T` in Go, `test` in Vitest, `it` in Hspec, or `#[tokio::test]` in Rust to define and select each test directly.
+Call the language's environment helper inside that body. It manages only the image lease, isolated container, operation budget, and cleanup.
+There is no library-specific case registry or test runner. See each language README and the equivalent samples for the exact syntax.
 
 The supplied image must remain running long enough to receive commands; the acceptance fixture uses `sleep infinity`.
 There is no generic application-readiness check.

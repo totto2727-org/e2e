@@ -36,12 +36,12 @@ Do not report the scenario complete until the documentation validator passes.
 - Use a lightweight pre-test task, normally a Just recipe, to build the caller-owned local image.
 - Keep the recipe to the required Docker build invocation unless the project contract requires more.
 - Do not build, pull, or remove the image from the scenario Go code or the reusable E2E library.
-- Make the project test task depend on the pre-test image task when the task runner supports dependencies.
+- Make the explicit `e2e` task depend on image preparation. Keep the normal lightweight `test` task Docker-free.
 
 ### 3. Isolate every scenario
 
-- Register one `cli.Case` for each independently named scenario.
-- Let `cli.Run` create one disposable Testcontainers container per case.
+- Define each named scenario with standard `Test*` functions or `t.Run`. Invoke `cli.NewEnvironment(t, image)` inside that test body.
+- Let the helper own one disposable container and its image lease through `t.Cleanup`. Keep names, selection, `t.Parallel`, and reporting in Go's `testing` package.
 - Keep fixed scenario filesystem roots inside the container; never mount the host workspace or Docker socket into scenario containers.
 - Use the shared environment helper for commands and file transfer instead of adding standalone Shell E2E scripts.
 

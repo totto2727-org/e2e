@@ -6,16 +6,15 @@ export default defineConfig({
     projects: [
       { test: { name: 'native', include: ['test/native.test.ts'] } },
       { test: { name: 'package', include: ['test/package.test.mjs'] } },
-      { test: { name: 'docker', include: ['test/docker.test.ts'] } },
+      { test: { name: 'docker', include: ['test/docker.test.ts'], testTimeout: 125_000 } },
     ],
   },
   pack: {
-    entry: ['src/index.ts', 'src/vitest.ts'],
+    entry: ['src/index.ts'],
     format: ['esm'],
     platform: 'node',
     dts: true,
     clean: true,
-    deps: { neverBundle: ['vitest'] },
   },
   run: {
     tasks: {

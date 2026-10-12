@@ -2,19 +2,15 @@
 
 module Main (main) where
 
-import Control.Exception (throwIO)
-import Control.Monad (forM_)
-import Test.CLI.E2E (Case (..), CaseResult (..), Command (..), Environment, Result (..), checkCommand, runCases)
+import Test.CLI.E2E (Command (..), Environment, Result (..), checkCommand, withEnvironment)
 import Test.Hspec (hspec, it)
 
 main :: IO ()
-main = do
-  results <- runCases "example-cli:local"
-    [ Case "prints greeting" printsGreetingScenario
-    , Case "returns expected failure" returnsExpectedFailureScenario
-    ]
-  hspec $ forM_ results $ \result ->
-    it (caseName result) (either throwIO pure (outcome result))
+main = hspec $ do
+  it "prints greeting" $
+    withEnvironment "example-cli:local" printsGreetingScenario
+  it "returns expected failure" $
+    withEnvironment "example-cli:local" returnsExpectedFailureScenario
 
 printsGreetingScenario :: Environment -> IO ()
 printsGreetingScenario environment =

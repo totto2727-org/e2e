@@ -9,10 +9,10 @@ These complete consumer source/document pairs exercise the same two cases throug
 | TypeScript | [multiple_scenarios.test.ts](./typescript/multiple_scenarios.test.ts) | [multiple_scenarios.test.md](./typescript/multiple_scenarios.test.md) | [Private workspace package](./typescript/package.json) depends on the checkout's `@totto2727/e2e-cli` |
 | Rust       | [multiple_scenarios.rs](./rust/multiple_scenarios.rs)                 | [multiple_scenarios.md](./rust/multiple_scenarios.md)                 | [Cargo manifest](./rust/Cargo.toml) selects the checkout's Rust library by path                       |
 
-Each runner receives `example-cli:local` and registers separate uniquely named `prints greeting` and `returns expected failure` cases.
+Each standard test framework registers the separate `prints greeting` and `returns expected failure` tests. Each test invokes its library's scoped environment helper with `example-cli:local`.
 The greeting case executes literal argv `echo`, `hello from e2e` and asserts exit `0`, exact stdout `hello from e2e\n`, and empty stderr.
 The failure case executes literal argv `false` and asserts exit `1` and two empty streams.
-Each case gets a distinct fresh container from its library runner, not a shared application container.
+Each test gets a distinct fresh container from its environment helper, not a shared application container. The library does not register tests, schedule parallelism, or collect outcomes.
 The source assertions observe real library execution. None of the examples supplies fake command output, duplicates a Docker backend, or uses host `docker exec` status.
 The libraries own container cleanup and retain the caller's image. These minimal consumers do not independently inspect identities or cleanup and do not assert filesystem state.
 
@@ -22,7 +22,7 @@ Run commands below from the repository root unless the command explicitly change
 Use the repository's Nix shells for the pinned toolchains and installed Haskell dependencies.
 Install TypeScript dependencies through the authoritative root pnpm workspace and lockfile, keeping the root release-age safeguards in force.
 The workspace must include `.agents/skills/document-e2e-scenarios/references/example/typescript` before installing. Its package name is `@totto2727/e2e-doc-examples`.
-The TypeScript consumer uses real package exports, including public `/vitest`, without source or distribution aliases. Build the local library before checking or collecting the consumer.
+The TypeScript consumer uses the real public package export without source or distribution aliases. Vitest's own `test` defines each case. Build the local library before checking or collecting the consumer.
 Haskell and Rust use their lightweight local consumer manifests without requiring registry publication of either library.
 Build artifacts belong under root `tmp/scenario-doc-examples/`. The Rust consumer lockfile is retained so subsequent builds can use `--locked`.
 
@@ -43,7 +43,7 @@ nix develop "$repo#haskell" -c just build
 
 This compiles and links the exact `MultipleScenariosSpec.hs` with warnings treated as errors, depending on the exposed local `Test.CLI.E2E` module through Cabal rather than copying library sources.
 It does not execute `main` or contact Docker.
-`main` runs both case actions first and then maps every named `Either SomeException ()` outcome to its own Hspec example. Hspec name filters therefore do not select which case actions execute.
+Each Hspec `it` invokes `withEnvironment` inside its test body. Hspec name filters select the body before any Docker operation, and assertions retain Hspec's normal reporting.
 Do not include this consumer suite in a native `cabal test all` task: it is intentionally Docker-bearing when executed.
 
 ### TypeScript
@@ -51,11 +51,10 @@ Do not include this consumer suite in a native `cabal test all` task: it is inte
 ```sh
 pnpm exec vp run @totto2727/e2e-cli#build
 pnpm exec tsc --project .agents/skills/document-e2e-scenarios/references/example/typescript/tsconfig.json
-pnpm exec vp test list --no-staticParse --config .agents/skills/document-e2e-scenarios/references/example/typescript/vite.config.ts --project docker
+pnpm exec vp test list --config .agents/skills/document-e2e-scenarios/references/example/typescript/vite.config.ts --project docker
 ```
 
-The typecheck consumes the built public declarations. The list command evaluates actual registration without running test bodies or lifecycle hooks.
-Vitest 5 defaults to static parsing for `list`, which cannot discover indirect `registerCases` registration. Use `--no-staticParse` for the two case names to appear.
+The typecheck consumes the built public declarations. The standard list command discovers the two direct Vitest test definitions without running test bodies or Docker setup. No indirect-registration workaround is required.
 The static `native` project deliberately includes no Docker source. This pure consumer sample has no unit-test suite, so it exposes no native `test` task and does not manufacture a successful test run with `--passWithNoTests`.
 The static `docker` project includes only `multiple_scenarios.test.ts`. Passing a filename filter to the default native project does not opt into Docker.
 The package provides a direct `check` task invoking TypeScript and Docker-free `ci` depending only on `check`.
@@ -72,8 +71,8 @@ repo="$PWD"
 The local `build` recipe compiles the exact declared integration-test source with `cargo test --locked --test multiple_scenarios --no-run` against the local `cli-e2e` crate.
 Cargo can fetch the pinned dependencies on a clean machine; `--locked` prevents changes to the committed dependency resolution. Do not require an already populated registry cache with `--offline`.
 Its explicit target directory is root `tmp/scenario-doc-examples/rust`.
-Ordinary `cargo test --locked --test multiple_scenarios --target-dir ../../../../../../tmp/scenario-doc-examples/rust`, run from the sample directory, leaves the Tokio test ignored. This default exclusion does not prove either Docker case passes.
-The case functions use public `Environment`, `Case`, `Command`, and byte-oriented `CommandResult` and return every error to the runner.
+Ordinary `cargo test --locked --test multiple_scenarios --target-dir ../../../../../../tmp/scenario-doc-examples/rust`, run from the sample directory, leaves both Tokio tests ignored. This default exclusion does not prove either Docker case passes.
+Each individual `#[tokio::test]` uses public `with_environment`, `Environment`, `Command`, and byte-oriented `CommandResult`. Rust's standard harness selects and reports each test independently.
 
 ## Explicit real Docker acceptance
 
@@ -87,7 +86,7 @@ repo="$PWD"
 # TypeScript, after the local library build and workspace install:
 pnpm exec vp test run --config .agents/skills/document-e2e-scenarios/references/example/typescript/vite.config.ts --project docker
 
-# Rust, selecting only the ignored consumer test:
+# Rust, selecting the ignored consumer tests:
 (cd .agents/skills/document-e2e-scenarios/references/example/rust && nix develop "$repo#rust" -c just e2e)
 ```
 

@@ -2,14 +2,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Test.CLI.E2E
   ( Command(..), Result(..), Output(..), E2EError(..), Environment
-  , Case(..), CaseResult(..), runCases, containerID
+  , withEnvironment, containerID
   , run, checkCommand, writeFile, readFile, checkFile
   , checkMissing, checkRegularFile, checkDirectory, checkSymlink
   ) where
 
 import Prelude hiding (readFile, writeFile)
-import Control.Concurrent.Async (mapConcurrently)
-import Control.Concurrent.QSem
 import Control.Exception hiding (AssertionFailed)
 import Control.Monad (unless, void, when)
 import qualified Codec.Archive.Tar as Tar
@@ -18,45 +16,32 @@ import Data.Aeson hiding (Result)
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Numeric (showHex)
 import System.FilePath.Posix (takeDirectory, takeFileName)
 import System.IO (IOMode(ReadMode), withBinaryFile)
+import System.Timeout (timeout)
+import qualified System.IO as IO
 import Network.HTTP.Client (responseBody, responseStatus, brConsume, withResponse)
 import Network.HTTP.Types (statusCode)
 import Test.CLI.E2E.Internal
 
--- Cases are independent. Outcomes preserve arbitrary caller exceptions.
-data Case = Case { name :: String, action :: Environment -> IO () }
-data CaseResult = CaseResult { caseName :: String, outcome :: Either SomeException () }
-
 containerID :: Environment -> String
 containerID (Environment _ ident _) = ident
 
-runCases :: String -> [Case] -> IO [CaseResult]
-runCases image cases = do
+-- Hspec (or another test framework) owns names, filtering and scheduling.
+-- Each invocation leases the resolved image and owns one fresh case container.
+withEnvironment :: String -> (Environment -> IO a) -> IO a
+withEnvironment image use = do
   validateString image
   when (null image) (throwIO (InvalidInput "image must not be empty"))
-  let names = map name cases
-  when (any null names || Set.size (Set.fromList names) /= length names)
-    (throwIO (InvalidInput "case names must be nonempty and unique"))
+  deadline <- newDeadline 60
   withEngine $ \engine -> do
-    setupDeadline <- newDeadline 60
-    imageID <- bounded setupDeadline $ jsonRequest engine "GET" ("/images/" ++ encodeSegment image ++ "/json") Null identifier
-    ownedContainer engine imageID setupDeadline False $ \_ -> do
-      slots <- newQSem 2
-      mapConcurrently (runCase engine imageID slots) cases
-
-runCase :: Engine -> String -> QSem -> Case -> IO CaseResult
-runCase engine image slots testCase = bracket_ (waitQSem slots) (signalQSem slots) $ do
-  result <- try $ do
-    deadline <- newDeadline 60
-    ownedContainer engine image deadline True (action testCase . (\ident -> Environment engine ident deadline))
-  case result of
-    Left err | Just (_ :: SomeAsyncException) <- fromException err -> throwIO err
-    _ -> pure (CaseResult (name testCase) result)
+    imageID <- bounded deadline $ jsonRequest engine "GET" ("/images/" ++ encodeSegment image ++ "/json") Null identifier
+    ownedContainer engine imageID deadline False $ \_ ->
+      ownedContainer engine imageID deadline True $ \ident ->
+        use (Environment engine ident deadline)
 
 -- Ownership is registered before the create request can reach the daemon.
 -- Inspect the random name and verify its label before removing by immutable ID.
@@ -77,8 +62,16 @@ ownedContainer engine image deadline start use = do
     case (result, removed) of
       (Right value, Right ()) -> pure value
       (Left err, Right ()) -> throwIO (err :: SomeException)
+      (Right _, Left err) | Just (_ :: SomeAsyncException) <- fromException err -> throwIO err
       (Right _, Left err) -> throwIO (CleanupFailed err Nothing)
-      (Left err, Left cleanupError) -> throwIO (CleanupFailed cleanupError (Just err))
+      (Left err, Left cleanupError) -> do
+        -- A secondary cleanup failure must be visible without replacing the
+        -- original Hspec assertion or asynchronous cancellation. Diagnostics
+        -- are best-effort and bounded so even a blocked stderr cannot hold us.
+        void (try (timeout 1000000 (IO.hPutStrLn IO.stderr
+          ("Haskell E2E cleanup failed: " ++ displayException (cleanupError :: SomeException))))
+          :: IO (Either SomeException (Maybe ())))
+        throwIO (err :: SomeException)
 
 cleanupOwned :: Engine -> String -> String -> IO ()
 cleanupOwned engine@(Engine manager _) ownedName token = do

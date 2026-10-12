@@ -40,8 +40,9 @@ Keep language-specific implementation details out of the common contract.
 
 - Resolve a caller-built local image without pulling, then retain its immutable ID with a stopped lease container.
 - Create a fresh container for each uniquely named case and remove all owned containers without deleting the image.
-- Allow at most two concurrent cases per runner and retain the slot through cleanup.
-- Start the one-minute case budget after acquiring a slot and before creating the container.
+- Keep test registration, names, selection, assertions, scheduling, and reporting in the language's standard test framework. Do not add a library-specific runner or case registry.
+- Provide a scoped environment helper inside each standard test. Let the framework control parallelism rather than imposing a library-wide scheduler.
+- Start the one-minute operation budget when the helper is invoked, before image inspection and container creation.
 - Give cleanup a fresh thirty-second total budget, including retries.
 - Pass literal argv entries and expose separate stdout, stderr, and inspected exit status.
 - Distinguish command failure from Docker, transport, framing, and cancellation errors.

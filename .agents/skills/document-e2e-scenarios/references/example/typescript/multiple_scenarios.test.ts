@@ -1,10 +1,13 @@
-import type { Environment } from '@totto2727/e2e-cli'
-import { registerCases } from '@totto2727/e2e-cli/vitest'
+import { withEnvironment, type Environment } from '@totto2727/e2e-cli'
+import { test } from 'vitest'
 
-registerCases('example-cli:local', [
-  { name: 'prints greeting', run: printsGreetingScenario },
-  { name: 'returns expected failure', run: returnsExpectedFailureScenario },
-])
+test.concurrent('prints greeting', async (context) => {
+  await withEnvironment('example-cli:local', printsGreetingScenario, context.signal)
+})
+
+test.concurrent('returns expected failure', async (context) => {
+  await withEnvironment('example-cli:local', returnsExpectedFailureScenario, context.signal)
+})
 
 async function printsGreetingScenario(environment: Environment): Promise<void> {
   await environment.checkCommand(

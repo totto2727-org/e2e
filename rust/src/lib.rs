@@ -1,12 +1,12 @@
 //! Async CLI cases in fresh, locally built Linux containers.
 //!
 //! ```no_run
-//! use cli_e2e::{Case, Command, CommandResult, run_cases};
-//! # async fn example() -> Result<(), cli_e2e::Error> {
-//! run_cases("e2e-example:local", vec![Case::new("greeting", |env| async move {
+//! use cli_e2e::{Command, CommandResult, ScopeError, with_environment};
+//! # async fn example() -> Result<(), ScopeError<cli_e2e::Error>> {
+//! with_environment("e2e-example:local", |env| async move {
 //!     env.check_command(Command::new(["echo", "hello"]),
 //!         CommandResult { exit_code: 0, stdout: b"hello\n".to_vec(), stderr: vec![] }).await
-//! })]).await?;
+//! }).await?;
 //! # Ok(()) }
 //! ```
 use bollard::{
@@ -19,24 +19,18 @@ use bollard::{
         RemoveContainerOptionsBuilder, UploadToContainerOptionsBuilder,
     },
 };
-use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
+use futures_util::{FutureExt, StreamExt};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt,
     future::Future,
     io::Read,
     panic::AssertUnwindSafe,
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicU8, Ordering},
-    },
+    sync::atomic::{AtomicU8, Ordering},
     time::Duration,
 };
-use tokio::{
-    sync::Semaphore,
-    time::{Instant, timeout, timeout_at},
-};
+use tokio::time::{Instant, timeout_at};
 use tokio_util::sync::CancellationToken;
 
 const LABEL: &str = "org.totto2727.e2e.rust.owner";
@@ -114,12 +108,6 @@ pub enum Error {
         resource: String,
         cause: Box<Error>,
     },
-    Multiple(Vec<Error>),
-    Case {
-        name: String,
-        cause: Box<Error>,
-    },
-    Panic,
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -130,7 +118,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Archive(e) => Some(e),
-            Self::Cleanup { cause, .. } | Self::Case { cause, .. } => Some(cause),
+            Self::Cleanup { cause, .. } => Some(cause),
             Self::Docker(e)
             | Self::Execution {
                 failure: ExecutionFailure::Docker(e),
@@ -166,20 +154,39 @@ fn path_valid(value: &str) -> Result<(), Error> {
     }
 }
 
-/// An owned async callback. `new` hides future boxing.
-pub struct Case {
-    name: String,
-    action: Box<dyn FnOnce(Environment) -> BoxFuture<'static, Result<(), Error>> + Send>,
+/// Scoped lifecycle failure preserving the caller's concrete callback error.
+#[derive(Debug)]
+pub enum ScopeError<E> {
+    Infrastructure(Error),
+    Callback(E),
+    Cleanup {
+        prior: Option<Box<ScopeError<E>>>,
+        errors: Vec<Error>,
+    },
 }
-impl Case {
-    pub fn new<F, Fut>(name: impl Into<String>, action: F) -> Self
-    where
-        F: FnOnce(Environment) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<(), Error>> + Send + 'static,
-    {
-        Self {
-            name: name.into(),
-            action: Box::new(move |env| Box::pin(action(env))),
+impl<E: fmt::Display> fmt::Display for ScopeError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Infrastructure(error) => error.fmt(f),
+            Self::Callback(error) => error.fmt(f),
+            Self::Cleanup { prior, errors } => {
+                if let Some(prior) = prior {
+                    write!(f, "{prior}; ")?;
+                }
+                write!(f, "cleanup failed: {errors:?}")
+            }
+        }
+    }
+}
+impl<E: std::error::Error + 'static> std::error::Error for ScopeError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Infrastructure(error) => Some(error),
+            Self::Callback(error) => Some(error),
+            Self::Cleanup { prior, errors } => prior.as_deref().map_or_else(
+                || errors.first().map(|error| error as &dyn std::error::Error),
+                |prior| Some(prior as &dyn std::error::Error),
+            ),
         }
     }
 }
@@ -538,6 +545,7 @@ impl Resource {
         Ok(result?.id)
     }
     async fn cleanup(&self) -> Result<(), Error> {
+        let deadline = Instant::now() + CLEANUP_BUDGET;
         if self.creation.load(Ordering::SeqCst) == 0 {
             return Ok(());
         }
@@ -594,7 +602,7 @@ impl Resource {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         };
-        timeout(CLEANUP_BUDGET, cleanup)
+        timeout_at(deadline, cleanup)
             .await
             .unwrap_or_else(|_| Err(last_error.unwrap_or(Error::Deadline)))
             .map_err(|cause| Error::Cleanup {
@@ -609,105 +617,161 @@ impl Drop for CancelOnDrop {
         self.0.cancel();
     }
 }
-/// Run at most two cases concurrently, resolving only a caller-owned local image.
-/// Dropping this future signals cancellation to a supervised cleanup task.
-/// Keep the Tokio runtime alive to allow that cleanup to finish.
+/// Run one caller callback in a fresh container leased from a local image.
+/// Native test runners control case names and concurrency. Dropping this future
+/// cancels its supervised task, which retains ownership through bounded cleanup.
+/// Keep the Tokio runtime alive until that background cleanup finishes.
 ///
 /// # Errors
-/// Returns input or setup errors before execution, and retains case and cleanup
-/// failures in [`Error::Multiple`]. Caller panics become [`Error::Panic`].
-pub async fn run_cases(image: &str, cases: Vec<Case>) -> Result<(), Error> {
-    valid(image)?;
+/// Returns typed infrastructure, callback, and cleanup failures without erasing
+/// the callback's error type.
+///
+/// # Panics
+/// Callback panics are resumed with their original payload after cleanup.
+/// Cleanup failures during a panic are written to stderr before resuming it.
+pub async fn with_environment<F, Fut, T, E>(image: &str, callback: F) -> Result<T, ScopeError<E>>
+where
+    F: FnOnce(Environment) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<T, E>> + Send + 'static,
+    T: Send + 'static,
+    E: Send + 'static,
+{
+    let deadline = Instant::now() + CASE_BUDGET;
+    valid(image).map_err(ScopeError::Infrastructure)?;
     if image.is_empty() {
-        return Err(Error::InvalidInput("empty image".into()));
-    }
-    let mut names = HashSet::new();
-    for case in &cases {
-        valid(&case.name)?;
-        if case.name.is_empty() || !names.insert(case.name.clone()) {
-            return Err(Error::InvalidInput("empty or duplicate case name".into()));
-        }
+        return Err(ScopeError::Infrastructure(Error::InvalidInput(
+            "empty image".into(),
+        )));
     }
     let cancel = CancellationToken::new();
-    let _guard = CancelOnDrop(cancel.clone());
     let image = image.to_string();
-    tokio::spawn(async move { supervise(image, cases, cancel).await })
-        .await
-        .map_err(|_| Error::Panic)?
+    let scope_cancel = cancel.clone();
+    owned_scope(
+        async move { supervise(image, callback, scope_cancel, deadline).await },
+        cancel,
+    )
+    .await
+}
+async fn owned_scope<T: Send + 'static, E: Send + 'static>(
+    future: impl Future<Output = Outcome<T, E>> + Send + 'static,
+    cancel: CancellationToken,
+) -> Result<T, ScopeError<E>> {
+    let _guard = CancelOnDrop(cancel);
+    let task = tokio::spawn(future);
+    match task.await {
+        Ok(outcome) => finish(outcome),
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(_) => Err(ScopeError::Infrastructure(Error::Cancelled)),
+    }
+}
+type PanicPayload = Box<dyn std::any::Any + Send>;
+type Outcome<T, E> = Result<Result<T, ScopeError<E>>, PanicPayload>;
+fn finish<T, E>(outcome: Outcome<T, E>) -> Result<T, ScopeError<E>> {
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 async fn setup<T>(
     cancel: &CancellationToken,
+    deadline: Instant,
     future: impl Future<Output = Result<T, Error>>,
 ) -> Result<T, Error> {
-    tokio::select! { biased; () = cancel.cancelled() => Err(Error::Cancelled), result = timeout(CASE_BUDGET, future) => result.map_err(|_| Error::Deadline)? }
+    tokio::select! { biased; () = cancel.cancelled() => Err(Error::Cancelled), result = timeout_at(deadline, future) => result.map_err(|_| Error::Deadline)? }
 }
-async fn supervise(
+async fn supervise<F, Fut, T, E>(
     image: String,
-    cases: Vec<Case>,
+    callback: F,
     cancel: CancellationToken,
-) -> Result<(), Error> {
-    let docker = setup(&cancel, connect()).await?;
-    let inspected = setup(&cancel, async { Ok(docker.inspect_image(&image).await?) }).await?;
-    let image = inspected
-        .id
-        .ok_or_else(|| Error::Unsupported("image ID absent".into()))?;
+    deadline: Instant,
+) -> Outcome<T, E>
+where
+    F: FnOnce(Environment) -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+{
+    let docker = match setup(&cancel, deadline, connect()).await {
+        Ok(docker) => docker,
+        Err(error) => return Ok(Err(ScopeError::Infrastructure(error))),
+    };
+    supervise_with_docker(docker, image, callback, cancel, deadline).await
+}
+async fn supervise_with_docker<F, Fut, T, E>(
+    docker: Docker,
+    image: String,
+    callback: F,
+    cancel: CancellationToken,
+    deadline: Instant,
+) -> Outcome<T, E>
+where
+    F: FnOnce(Environment) -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+{
+    let image = setup(&cancel, deadline, async {
+        docker
+            .inspect_image(&image)
+            .await?
+            .id
+            .ok_or_else(|| Error::Unsupported("image ID absent".into()))
+    })
+    .await;
+    let image = match image {
+        Ok(image) => image,
+        Err(error) => return Ok(Err(ScopeError::Infrastructure(error))),
+    };
     let owner = uuid::Uuid::new_v4().to_string();
     let lease = Resource::new(docker.clone(), &owner);
+    let resource = Resource::new(docker.clone(), &owner);
+    let case_cancel = cancel.child_token();
+    let action = async {
+        setup(&cancel, deadline, lease.create(&image))
+            .await
+            .map_err(ScopeError::Infrastructure)?;
+        let env = tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(Error::Cancelled),
+            result = timeout_at(deadline, async {
+                let id = resource.create(&image).await?;
+                docker.start_container(&id, None).await?;
+                Ok(Environment { docker: docker.clone(), id, deadline, cancel: case_cancel.clone() })
+            }) => result.map_err(|_| Error::Deadline).and_then(|result| result),
+        }.map_err(ScopeError::Infrastructure)?;
+        // Do not race a timer against env.run: it must publish its partial output.
+        // The operation budget cannot preempt arbitrary caller code.
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(ScopeError::Infrastructure(Error::Cancelled)),
+            result = async { callback(env).await } => result.map_err(ScopeError::Callback),
+        }
+    };
+    let outcome = AssertUnwindSafe(action).catch_unwind().await;
+    case_cancel.cancel();
     let mut errors = Vec::new();
-    let retained = setup(&cancel, lease.create(&image)).await;
-    if let Err(e) = retained {
-        errors.push(e);
-    } else {
-        let slots = Arc::new(Semaphore::new(2));
-        let mut pending = FuturesUnordered::new();
-        for case in cases {
-            let docker = docker.clone();
-            let owner = owner.clone();
-            let image = image.clone();
-            let slots = slots.clone();
-            let cancel = cancel.clone();
-            pending.push(async move {
-                let permit = tokio::select! { () = cancel.cancelled() => return Err(Error::Cancelled), p = slots.acquire_owned() => p.map_err(|_| Error::Cancelled)? };
-                let deadline = Instant::now() + CASE_BUDGET;
-                let case_cancel = cancel.child_token();
-                let resource = Resource::new(docker.clone(), &owner);
-                let action = async {
-                    let id = resource.create(&image).await?;
-                    docker.start_container(&id, None).await?;
-                    Ok(Environment { docker: docker.clone(), id, deadline, cancel: case_cancel.clone() })
-                };
-                let result = tokio::select! { () = cancel.cancelled() => Err(Error::Cancelled), r = timeout_at(deadline, action) => r.map_err(|_| Error::Deadline).and_then(|r| r) };
-                let result = match result {
-                    Err(e) => Err(e), Ok(env) => {
-                        tokio::select! { () = cancel.cancelled() => Err(Error::Cancelled),
-                            r = AssertUnwindSafe(async { (case.action)(env).await }).catch_unwind() => r.unwrap_or(Err(Error::Panic)) }
-                    }
-                };
-                case_cancel.cancel();
-                let cleanup = resource.cleanup().await; drop(permit);
-                combine(result, cleanup).map_err(|cause| Error::Case { name: case.name, cause: Box::new(cause) })
-            });
+    for result in [resource.cleanup().await, lease.cleanup().await] {
+        if let Err(error) = result {
+            errors.push(error);
         }
-        while let Some(result) = pending.next().await {
-            if let Err(e) = result {
-                errors.push(e);
+    }
+    match outcome {
+        Err(payload) => {
+            if !errors.is_empty() {
+                eprintln!("cli-e2e cleanup failed while unwinding: {errors:?}");
             }
+            Err(payload)
         }
-    }
-    if let Err(e) = lease.cleanup().await {
-        errors.push(e);
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(Error::Multiple(errors))
+        Ok(result) => Ok(combine_scope(result, errors)),
     }
 }
-fn combine(first: Result<(), Error>, cleanup: Result<(), Error>) -> Result<(), Error> {
-    match (first, cleanup) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(e), Ok(())) | (Ok(()), Err(e)) => Err(e),
-        (Err(e), Err(c)) => Err(Error::Multiple(vec![e, c])),
+fn combine_scope<T, E>(
+    result: Result<T, ScopeError<E>>,
+    errors: Vec<Error>,
+) -> Result<T, ScopeError<E>> {
+    if errors.is_empty() {
+        result
+    } else {
+        Err(ScopeError::Cleanup {
+            prior: result.err().map(Box::new),
+            errors,
+        })
     }
 }
 #[cfg(test)]

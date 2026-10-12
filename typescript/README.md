@@ -1,31 +1,36 @@
 # TypeScript CLI E2E
 
-`@totto2727/e2e-cli` is a standalone Node.js library implementing the [shared contract](../README.md) with a native Docker Engine HTTP adapter and Vitest integration.
+`@totto2727/e2e-cli` is a standalone Node.js library implementing the [shared contract](../README.md) with a native Docker Engine HTTP adapter and a framework-independent scoped lifecycle.
 The package is private in this checkout and publication is not requested.
 
 ## Usage
 
 ```ts
-import { registerCases } from '@totto2727/e2e-cli/vitest'
+import { withEnvironment } from '@totto2727/e2e-cli'
+import { expect, test } from 'vitest'
 
-registerCases('my-application:local', [
-  {
-    name: 'greeting',
-    async run(environment) {
-      await environment.checkCommand(
-        { args: ['my-application', 'hello'], workingDir: '/workspace', env: ['MODE=test'] },
-        { exitCode: 0, stdout: 'hello\n', stderr: '' },
-      )
+test.concurrent('greeting', async (context) => {
+  await withEnvironment(
+    'my-application:local',
+    async (environment) => {
+      expect(
+        await environment.run({ args: ['my-application', 'hello'], workingDir: '/workspace', env: ['MODE=test'] }),
+      ).toEqual({ exitCode: 0, stdout: 'hello\n', stderr: '' })
     },
-  },
-])
+    context.signal,
+  )
+}, 125_000)
 ```
 
 Build the image before starting the tests, and keep its default entrypoint running long enough to receive commands.
 Commands preserve argv boundaries, including empty arguments, and environment strings such as `KEY=value`.
 Shell syntax requires explicit argv such as `['sh', '-c', 'echo first > /workspace/result.txt']`.
-`runCases(image, cases, signal?)` provides the same lifecycle without registering Vitest tests and rejects with an `AggregateError` containing case or cleanup failures.
-Case names must be unique and nonempty.
+`withEnvironment<T>(image, action, signal?): Promise<T>` returns the awaited callback value after cleanup.
+The callback receives `Environment` and returns `Promise<T>`.
+Use it inside ordinary `test` or `test.concurrent` callbacks and forward `context.signal`.
+Ordinary Vitest `expect` assertions remain available.
+The consumer's test framework controls names, scheduling, concurrency, and its enclosing timeout, with no library queue, registration, or suite aggregation.
+The package does not depend on a test framework and has no `/vitest` adapter.
 
 ## Values and operations
 
@@ -60,22 +65,26 @@ Captured partial text uses replacement characters only when an interrupted or in
 The cause may be `DockerError`, `DeadlineError`, a cancellation reason, or a native I/O/decode error.
 The daemon's diagnostics remain in the infrastructure error and are never appended to child stderr.
 An exit code is returned only after successful exec inspection reports `Running: false`; output EOF alone is not process completion.
-Cleanup failures reject the case, and simultaneous case/cleanup failures are retained in an `AggregateError`.
+A callback rejection is rethrown unchanged, including arbitrary non-Error values, unless cleanup also fails.
+Cleanup failures reject the invocation, and simultaneous callback/cleanup failures are retained in an `AggregateError`.
+A callback that returns after its signal was cancelled still rejects with the cancellation reason.
 
-The suite inspects the local image once, resolves its immutable ID, and retains it with a stopped lease container without pulling or removing the image.
-Every case receives a fresh container and retains its slot through cleanup, with at most two slots held at once.
-The fixed 60-second budget starts after acquiring a slot and includes creation, startup, and every environment operation.
-Vitest registration disables its enclosing test timeout so time spent in the slot queue does not consume this budget, and forwards Vitest's cancellation signal.
+Each invocation inspects the caller-built local image, resolves its immutable ID, and retains it with a stopped lease container without pulling or removing the image.
+It creates and starts one separate fresh container for its callback, then removes the case container and lease on completion or failure.
+The fixed 60-second operation budget begins when the helper is invoked, before image inspection, lease creation, container creation, and startup.
+Vitest time spent waiting to schedule the test does not consume this budget, because the helper has not yet been called.
+The consumer configures a test timeout that allows the operation and cleanup budgets, such as `125_000` milliseconds, and forwards Vitest's cancellation signal.
 The exposed `environment.signal` also allows caller code to cooperate with cancellation.
 Arbitrary caller code that ignores the signal, never resolves, or blocks the JavaScript event loop is not forcibly terminated by this library.
 
 Cancellation destroys the actual HTTP request and attached response stream.
 Returning from a case also closes its signal so an owned connection cannot outlive the case.
 Disconnecting exec does not prove the remote process stopped, so removing the case container is the final process boundary.
-Each cleanup receives a fresh 30-second budget independent of the case deadline.
+Each owned resource's cleanup receives a fresh 30-second total budget independent of the operation deadline.
+The two sequential cleanup stages can take up to 60 seconds in total, and lease cleanup is still attempted if case cleanup fails.
 Random UUID container names and matching ownership labels are acquired before creation, enabling safe recovery after partial creation or startup failure.
 Only matching owned containers are removed, and a cleanup failure is reported rather than hidden.
-The stopped lease is removed after all cases, leaving the caller's image intact.
+The stopped lease is removed after the callback and case cleanup, leaving the caller's image intact.
 
 ## Docker support
 
@@ -99,8 +108,8 @@ The repository-root `pnpm-lock.yaml` is authoritative, and its workspace configu
 Vite+ requires its bundled Vite alias and exact Vitest version, recorded with official migration/update references in the repository-root `pnpm-workspace.yaml`.
 TypeScript configuration follows `template/vite-plus-lib`: `@tsconfig/strictest` and `@tsconfig/node-ts` with only the template's `target`, `module`, `noEmit`, and Node types settings.
 Formatter and type-aware lint options match the template, including import/package sorting and preserved Markdown wrapping.
-Packaging retains the template's ESM declaration generation, with the necessary Node platform, two public entrypoints, and external Vitest peer.
-The `/vitest` integration has an optional Vitest peer dependency so ordinary non-Vitest callers can use the root entrypoint.
+Packaging retains the template's ESM declaration generation, with the necessary Node platform and a single public entrypoint.
+Vitest is used only by consumer tests, not by the reusable library.
 
 From the repository root:
 
@@ -114,9 +123,9 @@ nix develop .#typescript -c vp run --filter @totto2727/e2e-cli e2e
 Normal tests use controlled HTTP servers and reproducible local resources, such as temporary directories or in-memory fixtures, and do not require Docker or external services.
 Vitest 5.0.3 selects static projects through its standard `--project` option, without environment-variable include toggles.
 From `typescript/`, `vp test run` defaults to the `native` project, and `vp test run --project native` makes that selection explicit.
-Use `vp run test:vitest-package` to build and smoke-test both exported package entrypoints, or `vp test run --project package` when the build is already available.
+Use `vp run test:vitest-package` to build and smoke-test the public package entrypoint, or `vp test run --project package` when the build is already available.
 Use `vp test run --project docker` for Docker acceptance against the existing caller-built image.
-The explicit [Docker tests](test/docker.test.ts) register the six shared cases separately and verify distinct identities, exact file bytes/mode, removal of scenario and lease containers, and preservation of the caller-owned image.
+The explicit [Docker tests](test/docker.test.ts) define six ordinary concurrent Vitest tests and invoke `withEnvironment` inside each callback to verify distinct identities, exact file bytes/mode, removal of scenario and lease containers, and preservation of the caller-owned image.
 The `e2e` task directly selects the Docker project against the existing image.
 It disables Vite+ task caching so every invocation observes the current Docker daemon rather than replaying earlier success output, and it does not build the image itself.
 The deadline case takes approximately one minute.
@@ -134,9 +143,9 @@ Use `vp run --no-cache ci` for fresh execution.
 
 ## Validation status
 
-The template-aligned toolchain passes formatting, type-aware lint, strict TypeScript checking, ESM/declaration builds, 43 native tests, and the built-public-entrypoint smoke test.
-Default `vp test run` executes only the 43 native tests, and explicit `--project docker` file collection selects only the Docker suite without executing it.
-The build cache restores byte-identical `dist/` contents after those outputs are moved away.
-The earlier implementation also passed real Docker acceptance of the six registered cases against `e2e-example:local`.
-Those Docker observations validate the Unix-socket Linux-container baseline; controlled HTTP tests cover TCP transport and cancellation, but real remote TCP or TLS acceptance is not claimed.
-Docker acceptance remains separate from the normal `ci` task.
+The scoped API migration passes 52 native tests, two built-package tests, strict library TypeScript checking, and ESM/declaration builds.
+Native regression coverage includes arbitrary callback results and rejection identity, unrestricted consumer-owned concurrency, invocation-time deadlines covering image inspection, cancellation, partial output, ownership checks, and independent cleanup budgets.
+Built-package checks verify the single public entrypoint and rejection of retired framework and internal transport subpaths.
+These native HTTP fixtures do not prove real Docker acceptance of the migrated lifecycle.
+The six ordinary Docker tests and the two sample consumer tests remain explicitly selected acceptance workflows, separate from the normal `ci` task.
+Real Docker execution for this migration is coordinated at the repository root, not claimed by the native checks.

@@ -3,7 +3,6 @@
 module Main where
 
 import Prelude hiding (readFile, writeFile)
-import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async
 import Control.Concurrent.MVar
 import Control.Exception hiding (AssertionFailed)
@@ -23,7 +22,7 @@ import qualified Network.Socket.ByteString as NSB
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Timeout (timeout)
 import Test.Hspec
-import Test.CLI.E2E hiding (action)
+import Test.CLI.E2E
 import Test.CLI.E2E.Internal (Environment(..), Deadline(..), demux, validateCommand, withEngineHost)
 import Fixture
 
@@ -35,8 +34,9 @@ main = hspec $ do
       it ("rejects " ++ show command) (validateCommand command `shouldThrow` invalidInput)
     it "preserves empty arguments and environment values" $
       validateCommand (Command ["echo", ""] (Just "/workspace") ["X="]) `shouldReturn` ()
-    it "rejects duplicate case names before contacting Docker" $
-      runCases "image" [Case "same" (const (pure ())), Case "same" (const (pure ()))] `shouldThrow` invalidInput
+    forM_ ["", "image\0name"] $ \image ->
+      it ("rejects invalid image " ++ show image ++ " before contacting Docker") $
+        withEnvironment image (const (pure ())) `shouldThrow` invalidInput
   describe "rawstream framing" $ do
     it "keeps streams and arbitrary bytes across every one-byte boundary" $ do
       let bytes = frame 1 (BS.pack [0,255,10]) <> frame 2 "error" <> frame 1 "tail"
@@ -60,7 +60,7 @@ main = hspec $ do
             if target incoming == "/containers/c/exec" then respond socket 201 "{\"Id\":\"e\"}"
             else if target incoming == "/exec/e/start" then respond socket 200 (frame 1 "ok")
             else respond socket 200 "{\"Running\":false,\"ExitCode\":0}"
-      withServer handler $ \host -> withEnvironment host 1000000000 $ \environment -> do
+      withServer handler $ \host -> withTestEnvironment host 1000000000 $ \environment -> do
         run environment (Command ["program", "", "two words"] (Just "/work dir") ["X=two words", "EMPTY="])
           `shouldReturn` Result 0 "ok" ""
         events <- readMVar requests
@@ -82,7 +82,7 @@ main = hspec $ do
     it "does not treat an HTTP attach failure as a process result" $
       withServer (\incoming socket -> if target incoming == "/containers/c/exec"
         then respond socket 201 "{\"Id\":\"e\"}" else respond socket 500 "daemon failure") $ \host ->
-          withEnvironment host 1000000000 $ \environment ->
+          withTestEnvironment host 1000000000 $ \environment ->
             run environment (Command ["program"] Nothing []) `shouldThrow` executionFailure
     it "retains complete and incomplete frame output on decode error" $
       withExec (frame 2 "err" <> BS.take 10 (frame 1 "abcdef")) 0 $ \environment ->
@@ -91,7 +91,7 @@ main = hspec $ do
       closed <- newEmptyMVar
       withServer (\incoming socket -> if target incoming == "/containers/c/exec"
         then respond socket 201 "{\"Id\":\"e\"}" else stallResponse socket (frame 1 "partial") closed) $ \host ->
-          withEnvironment host 100000000 $ \environment -> do
+          withTestEnvironment host 100000000 $ \environment -> do
             run environment (Command ["program"] Nothing []) `shouldThrow` deadlineWith (Output "partial" "")
             timeout 1000000 (takeMVar closed) `shouldReturn` Just ()
     it "cancellation closes a stalled response" $ do
@@ -102,7 +102,7 @@ main = hspec $ do
           NSB.sendAll socket "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"
           putMVar attached ()
           void (NSB.recv socket 1) `finally` putMVar closed ()) $ \host ->
-          withEnvironment host 1000000000 $ \environment -> do
+          withTestEnvironment host 1000000000 $ \environment -> do
             withAsync (run environment (Command ["program"] Nothing [])) $ \worker -> do
               takeMVar attached
               cancel worker
@@ -111,7 +111,7 @@ main = hspec $ do
       reached <- newEmptyMVar
       closed <- newEmptyMVar
       withServer (\_ socket -> putMVar reached () >> void (NSB.recv socket 1) >> putMVar closed ()) $ \host ->
-        withEnvironment host 100000000 $ \environment -> do
+        withTestEnvironment host 100000000 $ \environment -> do
           run environment (Command ["program"] Nothing []) `shouldThrow` deadlineWith (Output "" "")
           takeMVar reached
           timeout 1000000 (takeMVar closed) `shouldReturn` Just ()
@@ -119,7 +119,7 @@ main = hspec $ do
     it "writes exact bytes with mode 0644 into the existing parent" $ do
       received <- newEmptyMVar
       withServer (\incoming socket -> putMVar received incoming >> respond socket 200 "") $ \host ->
-        withEnvironment host 1000000000 $ \environment -> do
+        withTestEnvironment host 1000000000 $ \environment -> do
           writeFile environment "/workspace/data.bin" (BS.pack [0,255,10])
           Incoming method path body headers <- takeMVar received
           headers `shouldContain` ["Accept-Encoding: identity"]
@@ -135,21 +135,21 @@ main = hspec $ do
       path <- either (throwIO . userError) pure (Tar.toTarPath False "data.bin")
       let archive = LBS.toStrict (Tar.write [Tar.fileEntry path (LBS.pack [0,255,10])])
       withServer (\_ socket -> respond socket 200 archive) $ \host ->
-        withEnvironment host 1000000000 $ \environment -> do
+        withTestEnvironment host 1000000000 $ \environment -> do
           readFile environment "/workspace/data.bin" `shouldReturn` BS.pack [0,255,10]
           checkFile environment "/workspace/data.bin" "wrong" `shouldThrow` assertionFailure
     it "rejects malformed archives" $
       withServer (\_ socket -> respond socket 200 "not a tar") $ \host ->
-        withEnvironment host 1000000000 $ \environment ->
+        withTestEnvironment host 1000000000 $ \environment ->
           readFile environment "/workspace/file" `shouldThrow` infrastructure
     it "rejects a directory instead of treating it as a file" $ do
       path <- either (throwIO . userError) pure (Tar.toTarPath True "directory")
       let archive = LBS.toStrict (Tar.write [Tar.directoryEntry path])
       withServer (\_ socket -> respond socket 200 archive) $ \host ->
-        withEnvironment host 1000000000 $ \environment ->
+        withTestEnvironment host 1000000000 $ \environment ->
           readFile environment "/workspace/directory" `shouldThrow` infrastructure
     it "rejects NUL file paths before transport" $
-      withEnvironment "http://127.0.0.1:1" 1000000000 $ \environment ->
+      withTestEnvironment "http://127.0.0.1:1" 1000000000 $ \environment ->
         writeFile environment "/workspace/x\0y" "bytes" `shouldThrow` invalidInput
   describe "physical path probes" $ do
     it "rejects a dangling link as missing" $
@@ -165,51 +165,78 @@ main = hspec $ do
         checkSymlink e "/link" "/resolved/relative" `shouldThrow` assertionFailure
     it "rejects probe code 2 as infrastructure failure" $
       withCommands (const (Result 2 "" "bad probe")) $ \e -> checkMissing e "/path" `shouldThrow` infrastructure
-  describe "owned case lifecycle" $ do
-    it "creates unique identities, preserves image ID and removes cases and lease" $
+  describe "scoped environment lifecycle" $ do
+    it "returns the callback value after removing its fresh container and lease" $
       withDaemon False False $ \host resources requests -> withDockerHost host $ do
-        identities <- newMVar []
-        results <- runCases "local:image" [Case (show n) (\e -> modifyMVar_ identities (pure . (containerID e:))) | n <- [1..5 :: Int]]
-        map caseName results `shouldBe` map show [1..5 :: Int]
-        mapM_ assertSuccess results
-        observed <- readMVar identities
-        Map.size (Map.fromList [(ident, ()) | ident <- observed]) `shouldBe` 5
+        identities <- mapM (\_ -> withEnvironment "local:image" (pure . containerID)) [1..5 :: Int]
+        Map.size (Map.fromList [(ident, ()) | ident <- identities]) `shouldBe` 5
         readMVar resources `shouldReturn` Map.empty
         events <- readMVar requests
         let createdImages = [image | Incoming "POST" path bytes _ <- events, "/containers/create?" `BS.isPrefixOf` path,
               Just (Object config) <- [decodeStrict' bytes], Just (String image) <- [KM.lookup "Image" config]]
-        createdImages `shouldBe` replicate 6 "sha256:local"
+        createdImages `shouldBe` replicate 10 "sha256:local"
+        length [() | Incoming "POST" path _ _ <- events, "/start" `BS.isSuffixOf` path] `shouldBe` 5
+        length [() | Incoming "GET" path _ _ <- events, "/images/" `BS.isPrefixOf` path] `shouldBe` 5
     it "removes an owned lease even when its create response fails" $
       withDaemonResponse True False False $ \host resources _ -> withDockerHost host $ do
-        runCases "local:image" [Case "never starts" (const (pure ()))] `shouldThrow` infrastructure
+        withEnvironment "local:image" (const (pure ())) `shouldThrow` infrastructure
         readMVar resources `shouldReturn` Map.empty
-    it "cancellation removes both an active case and its lease" $
+    it "cancellation removes both resources and preserves AsyncCancelled" $
       withDaemon False False $ \host resources _ -> withDockerHost host $ do
         entered <- newEmptyMVar
         blocked <- newEmptyMVar
-        withAsync (runCases "local:image" [Case "cancelled" (\_ -> putMVar entered () >> takeMVar blocked)]) $ \worker -> do
+        withAsync (withEnvironment "local:image" (\_ -> putMVar entered () >> takeMVar blocked)) $ \worker -> do
           takeMVar entered
           cancel worker
+          result <- waitCatch worker
+          case result of
+            Left err -> fromException err `shouldBe` Just AsyncCancelled
+            Right () -> expectationFailure "cancellation was swallowed"
           readMVar resources `shouldReturn` Map.empty
-    it "reports startup failure and still removes both owned resources" $
+    it "throws startup failure after removing both owned resources" $
       withDaemon True False $ \host resources _ -> withDockerHost host $ do
-        results <- runCases "local:image" [Case "startup" (const (pure ()))]
-        case results of
-          [result] -> outcome result `shouldSatisfy` either (const True) (const False)
-          _ -> expectationFailure "missing case outcome"
+        withEnvironment "local:image" (const (pure ())) `shouldThrow` infrastructure
         readMVar resources `shouldReturn` Map.empty
-    it "reports cleanup failure rather than a successful outcome" $
+    it "throws cleanup failure instead of returning the callback value" $
       withDaemon False True $ \host _ _ -> withDockerHost host $
-        runCases "local:image" [Case "cleanup" (const (pure ()))] `shouldThrow` cleanupFailure
-    it "runs no more than two case actions concurrently" $
-      withDaemon False False $ \host _ _ -> withDockerHost host $ do
-        active <- newMVar (0 :: Int, 0 :: Int)
-        let action' _ = bracket_
-              (modifyMVar_ active (\(count, peak) -> pure (count + 1, max peak (count + 1))))
-              (modifyMVar_ active (\(count, peak) -> pure (count - 1, peak))) (threadDelay 20000)
-        results <- runCases "local:image" [Case (show n) action' | n <- [1..8 :: Int]]
-        mapM_ assertSuccess results
-        readMVar active `shouldReturn` (0,2)
+        withEnvironment "local:image" (const (pure ())) `shouldThrow` cleanupFailure
+    forM_ [False, True] $ \removalFails -> do
+      it ("preserves caller exception identity with cleanup failure=" ++ show removalFails) $
+        withDaemon False removalFails $ \host _ _ -> withDockerHost host $ do
+          original <- newIORef ()
+          withEnvironment "local:image" (\_ -> throwIO (CallerFailure original))
+            `shouldThrow` (\(CallerFailure observed) -> observed == original)
+      it ("preserves Hspec failure identity with cleanup failure=" ++ show removalFails) $
+        withDaemon False removalFails $ \host _ _ -> withDockerHost host $ do
+          original <- try (expectationFailure "original Hspec failure") :: IO (Either SomeException ())
+          case original of
+            Left err -> do
+              result <- try (withEnvironment "local:image" (\_ -> throwIO err)) :: IO (Either SomeException ())
+              case result of
+                Left actual -> do
+                  (fromException actual :: Maybe SomeAsyncException) `shouldSatisfy` maybe True (const False)
+                  show actual `shouldBe` show err
+                  (fromException actual :: Maybe E2EError) `shouldSatisfy` maybe True (const False)
+                Right () -> expectationFailure "Hspec exception was swallowed"
+            Right () -> expectationFailure "expected Hspec failure"
+      it ("preserves ThreadKilled with cleanup failure=" ++ show removalFails) $
+        withDaemon False removalFails $ \host _ _ -> withDockerHost host $
+          withEnvironment "local:image" (\_ -> throwIO ThreadKilled)
+            `shouldThrow` (== ThreadKilled)
+    it "leaves concurrency to the caller without a fixed two-slot gate" $
+      withDaemon False False $ \host resources _ -> withDockerHost host $ do
+        entered <- newEmptyMVar
+        release <- newEmptyMVar
+        active <- newMVar (0 :: Int)
+        let use _ = do
+              count <- modifyMVar active (\n -> pure (n + 1, n + 1))
+              if count == 3 then putMVar entered () else pure ()
+              readMVar release
+        withAsync (mapConcurrently (\_ -> withEnvironment "local:image" use) [1..3 :: Int]) $ \worker -> do
+          timeout 2000000 (takeMVar entered) `shouldReturn` Just ()
+          putMVar release ()
+          void (wait worker)
+        readMVar resources `shouldReturn` Map.empty
   describe "unsupported backend" $ do
     it "rejects TLS explicitly" $ withEngineHost "https://localhost:2376" (const (pure ())) `shouldThrow` invalidInput
 
@@ -242,12 +269,12 @@ decodeChunks bytes = do
   demux reader ref
   readIORef ref
 
-withEnvironment :: String -> Word -> (Environment -> IO a) -> IO a
-withEnvironment host duration action = withEngineHost host $ \engine -> do
+withTestEnvironment :: String -> Word -> (Environment -> IO a) -> IO a
+withTestEnvironment host duration action = withEngineHost host $ \engine -> do
   now <- getMonotonicTimeNSec
   action (Environment engine "c" (Deadline (now + fromIntegral duration)))
 withExec :: BS.ByteString -> Int -> (Environment -> IO a) -> IO a
-withExec bytes code action = withServer handler $ \host -> withEnvironment host 1000000000 action
+withExec bytes code action = withServer handler $ \host -> withTestEnvironment host 1000000000 action
   where
     handler incoming socket
       | target incoming == "/containers/c/exec" = respond socket 201 "{\"Id\":\"e\"}"
@@ -273,10 +300,11 @@ withCommands answer use = do
         | otherwise = do
             result <- readMVar current
             respond socket 200 (LBS.toStrict (encode (object ["Running" .= False, "ExitCode" .= exitCode result])))
-  withServer handler $ \host -> withEnvironment host 1000000000 use
+  withServer handler $ \host -> withTestEnvironment host 1000000000 use
 
-assertSuccess :: CaseResult -> IO ()
-assertSuccess result = either throwIO pure (outcome result)
+data CallerFailure = CallerFailure (IORef ())
+instance Show CallerFailure where show _ = "CallerFailure"
+instance Exception CallerFailure
 
 withDockerHost :: String -> IO a -> IO a
 withDockerHost host use = bracket (mapM remember variables) (mapM_ restore) $ \_ -> do

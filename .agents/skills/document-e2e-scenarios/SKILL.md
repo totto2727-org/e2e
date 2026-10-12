@@ -19,7 +19,7 @@ The documentation structure is language-independent. Automated discovery and cov
 - TypeScript: `multiple_scenarios.test.ts` becomes `multiple_scenarios.test.md`.
 - Rust: `multiple_scenarios.rs` becomes `multiple_scenarios.md`.
 - For Go, scenario entrypoints are functions whose names end in `Scenario` in `*_test.go` files, as required by the bundled validator.
-- For other languages, identify the named functions actually registered as independent runner cases. Use their exact source identifiers, including Rust snake_case, without imposing Go naming conventions.
+- For other languages, identify the named scenario functions called by independent standard-framework tests. Use their exact source identifiers, including Rust snake_case, without imposing Go naming conventions.
 - If one source file contains multiple scenarios, document them in one Markdown file with one complete second-level section per scenario function, preserving registration order.
 - Write all scenario prose in English. Preserve exact output, paths, flags, argv entries, and code identifiers verbatim.
 
@@ -28,7 +28,7 @@ The documentation structure is language-independent. Automated discovery and cov
 1. Read the complete scenario source, shared helpers, fixture builders, and current public library API.
 2. Read the complete source/document pair for the language in [the example index](references/example/README.md). The Go pair remains intact and the other pairs exercise the same two observable cases through their own public APIs.
 3. Copy [the scenario template](assets/scenario-test.template.md) beside the source, name it according to the naming contract, and replace its placeholders.
-4. Duplicate the complete scenario block beginning with the `##` heading once per registered scenario function. Do not document the suite wrapper as another scenario.
+4. Duplicate the complete scenario block beginning with the `##` heading once per scenario function. Define tests with the language's standard framework and call the environment helper inside their bodies. Do not introduce a library-specific case registry or document a suite wrapper as another scenario.
 5. Remove unused optional rows instead of leaving empty prose. Keep each scenario's commands, arguments, fixtures, execution flow, results, and notes inside that scenario's section.
 6. List each executable and subcommand path without arguments or options under `Commands under test`. List argument and option tokens with their purpose under `Arguments and options`, without an `Applies to` column. Put each complete invocation and its literal argv order under `Execution flow`.
 7. Separate expected results into exit status, stdout, stderr, persisted state, filesystem/link state, and non-mutation guarantees where relevant. Distinguish asserted guarantees from behavior not independently tested.

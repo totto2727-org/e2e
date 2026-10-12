@@ -23,16 +23,16 @@ Verify exact greeting bytes and successful application completion.
 ### Preconditions and fixtures
 
 - The caller has built `example-cli:local` with `echo`, `false`, and a long-running default entrypoint.
-- `run_cases` registers `prints greeting` with a fresh container.
+- The native `prints_greeting_scenario` test invokes `with_environment` with a fresh lease and case container.
 - The consumer crate depends on the local library by path, not a published `cli-e2e` package.
 - See [compile and explicit ignored-test execution](../README.md).
 
 ### Execution flow
 
-1. The ignored Tokio test registers `Case::new("prints greeting", prints_greeting_scenario)`.
+1. The ignored native `prints_greeting_scenario` Tokio test awaits `with_environment("example-cli:local", callback)`.
 2. Await `environment.check_command` with `Command::new(["echo", "hello from e2e"])`, no working-directory override, and no environment overrides.
 3. Compare every actual field with `CommandResult { exit_code: 0, stdout: b"hello from e2e\n".to_vec(), stderr: Vec::new() }`.
-4. Return the operation's `Result<(), Error>` so runner failures fail the test.
+4. Return the operation's `Result<(), Error>` from the callback and propagate `Result<(), ScopeError<Error>>` from the helper so lifecycle failures fail the native test.
 
 ### Expected results
 
@@ -47,7 +47,7 @@ Verify exact greeting bytes and successful application completion.
 
 - Expected byte vectors are assertions against real Docker execution, not fake results.
 - The entrypoint is marked `#[ignore]`, so ordinary `cargo test` compiles but does not execute Docker actions.
-- Cases can run concurrently. Their registration order is not an execution dependency.
+- Native tests can run concurrently or be selected by name. Source order is not an execution dependency.
 
 ## `returns_expected_failure_scenario`
 
@@ -70,11 +70,11 @@ Verify that the expected nonzero application result remains available for exact 
 ### Preconditions and fixtures
 
 - The caller-built `example-cli:local` provides `false` and stays running with its default entrypoint.
-- The separate `returns expected failure` case gets a different fresh container from the greeting case.
+- The independent `returns_expected_failure_scenario` native test invokes `with_environment` and gets its own fresh lease and container.
 
 ### Execution flow
 
-1. Register `Case::new("returns expected failure", returns_expected_failure_scenario)` in the same ignored entrypoint.
+1. The ignored native `returns_expected_failure_scenario` Tokio test awaits `with_environment("example-cli:local", callback)`.
 2. Await `environment.check_command` with `Command::new(["false"])`, using the image working directory and default environment.
 3. Compare the actual result with `CommandResult { exit_code: 1, stdout: Vec::new(), stderr: Vec::new() }`.
 4. Return errors rather than converting them to successful outcomes.

@@ -1,4 +1,6 @@
 use super::*;
+use std::sync::Arc;
+use tokio::time::timeout;
 
 pub(super) type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -111,12 +113,16 @@ fn prior_error_and_cleanup_error_are_both_retained() {
         resource: "owned".into(),
         cause: Box::new(Error::Deadline),
     };
-    let Err(Error::Multiple(errors)) = combine(Err(Error::Cancelled), Err(cleanup)) else {
+    let Err(ScopeError::Cleanup {
+        prior: Some(prior),
+        errors,
+    }) = combine_scope::<(), _>(Err(ScopeError::Callback("consumer error")), vec![cleanup])
+    else {
         panic!("expected both errors")
     };
-    assert_eq!(errors.len(), 2);
-    assert!(matches!(errors[0], Error::Cancelled));
-    assert!(matches!(errors[1], Error::Cleanup { .. }));
+    assert!(matches!(*prior, ScopeError::Callback("consumer error")));
+    assert_eq!(errors.len(), 1);
+    assert!(matches!(errors[0], Error::Cleanup { .. }));
 }
 fn environment(deadline: Instant) -> TestResult<Environment> {
     Ok(Environment {
@@ -156,22 +162,13 @@ async fn cancellation_unblocks_pending_operations() -> TestResult {
     Ok(())
 }
 #[tokio::test]
-async fn case_names_fail_before_docker_connection() {
-    assert!(matches!(
-        run_cases("image", vec![Case::new("", |_| async { Ok(()) })]).await,
-        Err(Error::InvalidInput(_))
-    ));
-    assert!(matches!(
-        run_cases(
-            "image",
-            vec![
-                Case::new("a", |_| async { Ok(()) }),
-                Case::new("a", |_| async { Ok(()) })
-            ]
-        )
-        .await,
-        Err(Error::InvalidInput(_))
-    ));
+async fn image_validation_fails_before_docker_connection() {
+    for image in ["", "bad\0image"] {
+        assert!(matches!(
+            with_environment(image, |_| async { Ok::<(), Error>(()) }).await,
+            Err(ScopeError::Infrastructure(Error::InvalidInput(_)))
+        ));
+    }
 }
 
 pub(super) async fn request(socket: &mut tokio::net::TcpStream) -> TestResult<String> {

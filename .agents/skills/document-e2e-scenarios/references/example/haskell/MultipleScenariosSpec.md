@@ -23,15 +23,15 @@ Verify that the local CLI image prints the exact caller-visible greeting success
 ### Preconditions and fixtures
 
 - The caller has built `example-cli:local` with `echo`, `false`, and a default entrypoint that keeps the container running.
-- `runCases` creates a fresh container for the uniquely named `prints greeting` case.
+- The Hspec `it "prints greeting"` body calls `withEnvironment`, creating a fresh container and a private stopped image lease only when that example executes.
 - See [local build and explicit Docker commands](../README.md).
 
 ### Execution flow
 
-1. Register `printsGreetingScenario` as `Case "prints greeting"` in `main`.
+1. Register `printsGreetingScenario` inside the standard Hspec `it "prints greeting"` body using `withEnvironment "example-cli:local"`.
 2. Execute argv `["echo", "hello from e2e"]` through `checkCommand`, using the image working directory and no environment overrides.
 3. Compare the actual result with `Result 0 "hello from e2e\n" ""`.
-4. After `runCases` completes cleanup, map this case's outcome to its own Hspec example, rethrowing any failure with `either throwIO pure`.
+4. `withEnvironment` removes this invocation's running container and stopped lease before returning or rethrowing the original example exception.
 
 ### Expected results
 
@@ -46,8 +46,8 @@ Verify that the local CLI image prints the exact caller-visible greeting success
 
 - `OverloadedStrings` supplies the ASCII `ByteString` expectations, not synthetic command output.
 - The library compares every result field exactly and propagates infrastructure failures.
-- Cases may execute concurrently. Registration order does not impose execution order.
-- Hspec filters operate after these actions have already run. Select the case list before `runCases` to filter execution.
+- Hspec owns scheduling. This sample is sequential by default, and a consumer can use Hspec `parallel` and `--jobs N` for independent examples.
+- Hspec `--match` selects actual execution and `--dry-run` performs no Docker operations. There is no pre-run outcome aggregation.
 
 ## `returnsExpectedFailureScenario`
 
@@ -70,14 +70,14 @@ Verify that a nonzero application result is observable and can be asserted as th
 ### Preconditions and fixtures
 
 - The caller has built the local `example-cli:local` image with `false` and a long-running default entrypoint.
-- `runCases` creates a different fresh container for `returns expected failure`, not the greeting container.
+- The standard Hspec `it "returns expected failure"` calls `withEnvironment` to create its own fresh container and stopped lease, not the greeting container or lease.
 
 ### Execution flow
 
-1. Register `returnsExpectedFailureScenario` as `Case "returns expected failure"` in `main`.
+1. Register `returnsExpectedFailureScenario` in Hspec `it "returns expected failure"` using `withEnvironment "example-cli:local"`.
 2. Execute argv `["false"]` through `checkCommand` with the image working directory and no environment overrides.
 3. Compare the actual result with `Result 1 "" ""`.
-4. Report the collected outcome as its own Hspec example after runner cleanup, rethrowing errors rather than swallowing them.
+4. Finish cleanup before returning to Hspec, preserving the original callback exception if the example failed.
 
 ### Expected results
 
@@ -91,5 +91,5 @@ Verify that a nonzero application result is observable and can be asserted as th
 ### Notes
 
 - Application exit code `1` is a normal `Result`, not a Docker or transport error.
-- The runner owns cleanup for both case containers and the stopped image lease. The sample does not independently inspect cleanup or container identity.
+- The scoped helper owns cleanup for its running container and its stopped image lease. The sample does not independently inspect cleanup or container identity.
 - These expectations describe executable assertions, not a claim that Docker acceptance has already passed.

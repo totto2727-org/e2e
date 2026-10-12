@@ -6,7 +6,7 @@ export default {
     project: ['native'],
     projects: [
       { extends: true, test: { name: 'native', include: ['native/**/*.test.ts'] } },
-      { extends: true, test: { name: 'docker', include: ['multiple_scenarios.test.ts'] } },
+      { extends: true, test: { name: 'docker', include: ['multiple_scenarios.test.ts'], testTimeout: 125_000 } },
     ],
   },
   run: {
