@@ -148,4 +148,5 @@ Native regression coverage includes arbitrary callback results and rejection ide
 Built-package checks verify the single public entrypoint and rejection of retired framework and internal transport subpaths.
 These native HTTP fixtures do not prove real Docker acceptance of the migrated lifecycle.
 The six ordinary Docker tests and the two sample consumer tests remain explicitly selected acceptance workflows, separate from the normal `ci` task.
-Real Docker execution for this migration is coordinated at the repository root, not claimed by the native checks.
+Real Docker execution of the migrated API passed through the public root `vp run e2e` task on 2026-10-12: six ordinary Vitest tests and the two exact sample tests, with container cleanup and caller-image preservation.
+A separate standard `--project docker -t '^greeting$'` invocation passed one test and skipped the other five, including the filter-safe resource audit. Native checks alone are not the basis of this Docker claim.

@@ -82,8 +82,9 @@ No OpenSSL or pkg-config dependencies are required.
 ## Validation status
 
 The scoped API migration on 2026-10-12 is validated by native formatting, linting, build, tests, rustdoc compilation, consumer-example compilation, and native test discovery.
-Docker acceptance for this migration has not been run because it has not been authorized.
-The previous aggregate implementation passed local Linux-container acceptance on 2026-10-11, which does not validate the new scoped API or imply TLS, remote production daemon, or Windows support.
+Real Docker acceptance of the scoped API passed on 2026-10-12 through the public root `vp run e2e` task: seven independent Tokio tests, including six common behaviors and the identity/cleanup audit, plus two exact consumer sample tests.
+The standard Cargo name filter also executed only `greeting`, with six other acceptance tests filtered out. Cleanup and image preservation passed without requiring unrelated tests to execute.
+These observations cover the local Linux-container daemon, not TLS, remote production daemons, or Windows.
 
 ## Tasks and acceptance
 

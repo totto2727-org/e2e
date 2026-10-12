@@ -110,6 +110,11 @@ Also verify distinct container identities for separate cases, no scenario or lea
 Native tests should cover invalid input, infrastructure errors, exact comparison failures, cleanup failures, and cancellation at controlled transport boundaries without requiring Docker.
 Keep Docker execution behind an explicit E2E task. Normal build and unit-test tasks must not require Docker.
 
+The scoped APIs passed the public four-language `ci` and `e2e` tasks on 2026-10-12.
+Real Docker execution passed all six common tests per language, the Rust identity audit, and the eight equivalent documentation samples, with resource cleanup and image preservation.
+Separate standard Vitest name, Cargo name, Hspec `--match`, and Go `-run` invocations each executed only the selected greeting test successfully.
+The c-plugin consumer also passed all 50 real Docker scenarios against the published scoped Go API, without a local module replacement.
+
 ## Repository and tasks
 
 `go/`, `haskell/`, `typescript/`, and `rust/` contain independently usable libraries and their language-specific API documentation.
