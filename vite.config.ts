@@ -1,4 +1,7 @@
+import { generateIgnorePatterns } from '@totto2727/gitignore-patterns'
 import { defineConfig } from 'vite-plus'
+
+const ignorePatterns = await generateIgnorePatterns(new URL('.', import.meta.url))
 
 export default defineConfig({
   fmt: {
@@ -10,20 +13,22 @@ export default defineConfig({
     proseWrap: 'preserve',
     semi: false,
     singleQuote: true,
-    ignorePatterns: ['tmp/**', '**/tmp/**', '**/target/**', '**/dist-newstyle/**', '**/dist/**', '**/node_modules/**'],
+    ignorePatterns,
   },
-  lint: { options: { typeAware: true, typeCheck: true }, ignorePatterns: ['**/tmp/**', '**/target/**', '**/dist/**'] },
+  lint: { options: { typeAware: true, typeCheck: true }, ignorePatterns },
   run: {
     tasks: {
       'check:vp': { command: 'vp check', cache: { output: [] } },
       'check:nixfmt': { command: 'nixfmt --check flake.nix', cache: { output: [] } },
-      'fix:vp': { command: 'vp check --fix', cache: false },
+      'fix:vp': { command: 'vp check --fix', dependsOn: ['@totto2727/e2e-cli#fix'], cache: false },
       'fix:nixfmt': { command: 'nixfmt flake.nix', cache: false },
       check: {
         command: '',
         dependsOn: [
           'check:vp',
           'check:nixfmt',
+          'check:go',
+          '@totto2727/e2e-doc-examples#check',
           '@totto2727/e2e-go#check',
           '@totto2727/e2e-go-example#check',
           '@totto2727/e2e-haskell#check',
@@ -38,7 +43,6 @@ export default defineConfig({
           'fix:nixfmt',
           '@totto2727/e2e-go#fix',
           '@totto2727/e2e-go-example#fix',
-          '@totto2727/e2e-cli#fix',
           '@totto2727/e2e-rust#fix',
         ],
         cache: false,
@@ -106,15 +110,14 @@ export default defineConfig({
           output: [],
         },
       },
-      'check:examples': { command: '', dependsOn: ['check:go', '@totto2727/e2e-doc-examples#check'] },
-      'pree2e:docker': {
+      pree2e: {
         command: 'docker tag e2e-example:local example-cli:local',
         dependsOn: ['@totto2727/e2e-go-example#pree2e'],
         cache: false,
       },
       'e2e:vp': {
         command: "vp run --filter '!@totto2727/e2e' --concurrency-limit 1 e2e",
-        dependsOn: ['pree2e:docker'],
+        dependsOn: ['pree2e'],
         cache: false,
       },
       'e2e:go': {
@@ -136,7 +139,7 @@ export default defineConfig({
         dependsOn: ['e2e:cabal'],
         cache: false,
       },
-      ci: { command: '', dependsOn: ['check', 'build', 'test', 'check:examples', '@totto2727/e2e-cli#postbuild:pnpm'] },
+      ci: { command: '', dependsOn: ['check', 'build', 'test', '@totto2727/e2e-cli#postbuild'] },
       e2e: { command: '', dependsOn: ['e2e:cargo'], cache: false },
     },
   },

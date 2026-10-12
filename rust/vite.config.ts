@@ -24,22 +24,19 @@ export default defineConfig({
       'fix:rustfmt': { command: 'just fix-rustfmt', cache: false },
       'fix:clippy': { command: 'just fix-clippy', dependsOn: ['fix:rustfmt'], cache: false },
       // Cargo tasks share target/, including cache restoration. Keep them ordered.
-      'build:cargo': {
+      build: {
         command: 'just build',
         dependsOn: ['check:clippy'],
         cache: { input: inputs, output: ['target/**'] },
       },
-      'test:cargo': {
+      test: {
         command: 'just test',
-        dependsOn: ['build:cargo'],
+        dependsOn: ['build'],
         cache: { input: inputs, output: ['target/**'] },
       },
-      'e2e:cargo': { command: 'just e2e', cache: false },
+      e2e: { command: 'just e2e', cache: false },
       check: { command: '', dependsOn: ['check:rustfmt', 'check:clippy'] },
       fix: { command: '', dependsOn: ['fix:rustfmt', 'fix:clippy'], cache: false },
-      build: { command: '', dependsOn: ['build:cargo'] },
-      test: { command: '', dependsOn: ['test:cargo'] },
-      e2e: { command: '', dependsOn: ['e2e:cargo'], cache: false },
       ci: { command: '', dependsOn: ['check', 'build', 'test'] },
     },
   },

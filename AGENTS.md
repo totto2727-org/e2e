@@ -20,6 +20,7 @@ Keep language-specific implementation details out of the common contract.
 - Install the root workspace with `vp install --frozen-lockfile`.
 - Use Vite+ for cross-project dependencies and caching. Keep complex implementation-specific procedures in language-local Justfiles.
 - Put lightweight commands directly in `vite.config.ts`; express multi-stage work with `dependsOn` instead of parallel task-runner hierarchies.
+- Put a single command directly in its base category task. Add CLI or case suffixes and aggregates only when multiple tools or independently useful stages need subdivision.
 - `vp run fix` formats and autofixes supported implementations.
 - `vp run check` checks formatting and lint findings.
 - `vp run build` builds each implementation.
@@ -29,6 +30,7 @@ Keep language-specific implementation details out of the common contract.
 - Select one workspace task with its package name, such as `vp run @totto2727/e2e-rust#ci`.
 - Keep native-only standalone workflows JavaScript-independent. When a project and every child have no JS dependencies and no useful cache-control need, use native commands for light tasks and local Just recipes for heavy procedures.
 - Keep pure task caching enabled with complete source/configuration inputs and restorable outputs. Disable caching for mutations, image creation, and Docker acceptance.
+- Derive Vite+ formatter and linter exclusions with `@totto2727/gitignore-patterns` from the repository's `.gitignore` files. Keep the shared blocks in the root configuration. Add individual exclusions only for demonstrated helper limitations or cache-input gaps, and document the affected consumer and evidence.
 - Select native and Docker tests through standard project, suite, package, or ignored-test command options, not environment-dependent discovery.
 - Keep Docker tests out of the aggregate `ci` task.
 - Keep temporary outputs under `tmp/` and do not commit them.

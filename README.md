@@ -124,6 +124,12 @@ nix develop -c vp run e2e
 `ci` also compiles those exact sample sources through their real local package dependencies without executing Docker cases.
 Docker image creation and acceptance are not cached because daemon state is not a source-file output.
 Pure checks and builds are cached with declared source inputs and recoverable output paths.
+Formatter and linter exclusions come from the repository's `.gitignore` files through [@totto2727/gitignore-patterns](https://github.com/totto2727-org/gitignore-patterns).
+The root configuration owns both blocks, so commands from the TypeScript package use the same exclusions without duplicate lists.
+The helper's root-anchored literals are not cache-input globs, and Vite+ cache inputs do not automatically exclude Gitignored files.
+The TypeScript build uses automatic input tracking and declares `dist/**` as its restorable output; changing or removing those generated files does not require a parallel manual exclusion list.
+Tests that import the built package still track `dist/` as an input through their build dependency; do not exclude it from those consumers.
+Individual exclusions require evidence of a helper limitation or missing cache-input coverage.
 For example, `nix develop -c vp run @totto2727/e2e-rust#ci` selects only the Rust task graph.
 The native libraries remain usable without JavaScript: `nix develop .#rust -c bash -c 'cd rust && just ci'` runs the standalone Rust template commands.
 
@@ -138,9 +144,12 @@ The native libraries remain usable without JavaScript: `nix develop .#rust -c ba
 | `pre*`, `post*` | Named prerequisite or follow-up stages, wired through explicit dependencies. Type generation can be a `prebuild` dependency shared by `check` and `test`.                   |
 | `e2e`           | Explicitly selected heavyweight or multi-system acceptance tests, excluded from normal `test` and never cached against source files alone.                                  |
 
-Executing leaf tasks use `<category>:<CLI>`, such as `check:vp`, `check:clippy`, `build:cargo`, and `test:vitest`; the corresponding base task aggregates them through `dependsOn`.
-A case-specific suffix can distinguish consumers that use the same CLI. Cross-project orchestration uses named dependencies, not a sequence of hidden lifecycle hooks.
-`ci` is a justified convenience aggregate for checks, artifacts, and native tests. `pree2e:docker` prepares the caller-owned fixture and its sample image tag; it is not part of native CI.
+Put a single command directly in its base task, such as `build: { command: 'cargo build' }`, without an empty aggregate and a lone executing leaf.
+When a category needs multiple tools or independently useful stages, use `<category>:<CLI>` leaves, such as `check:vp`, `check:clippy`, and `test:vitest`, and aggregate them through `dependsOn`.
+A case-specific suffix can distinguish consumers that use the same CLI when that subdivision is needed.
+Cross-project orchestration uses named dependencies, not a sequence of hidden lifecycle hooks.
+`ci` is a justified convenience aggregate for checks, artifacts, and native tests.
+`pree2e` prepares the caller-owned fixture and its sample image tag; it is not part of native CI.
 Package inspection is a build follow-up, not an extra test category. Other proposed categories need a concrete purpose that does not fit these stages.
 
 ### Task-runner patterns

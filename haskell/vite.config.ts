@@ -16,22 +16,18 @@ export default defineConfig({
   run: {
     tasks: {
       // Cabal planning and cache restoration share tmp/cabal/. Keep them ordered.
-      'check:cabal': { command: 'just check', cache: { input: inputs, output: ['tmp/cabal/**'] } },
-      'build:cabal': {
+      check: { command: 'just check', cache: { input: inputs, output: ['tmp/cabal/**'] } },
+      build: {
         command: 'just build',
-        dependsOn: ['check:cabal'],
+        dependsOn: ['check'],
         cache: { input: inputs, output: ['tmp/cabal/**'] },
       },
-      'test:cabal': {
+      test: {
         command: 'just test',
-        dependsOn: ['build:cabal'],
+        dependsOn: ['build'],
         cache: { input: inputs, output: ['tmp/cabal/**'] },
       },
-      'e2e:cabal': { command: 'just e2e', cache: false },
-      check: { command: '', dependsOn: ['check:cabal'] },
-      build: { command: '', dependsOn: ['build:cabal'] },
-      test: { command: '', dependsOn: ['test:cabal'] },
-      e2e: { command: '', dependsOn: ['e2e:cabal'], cache: false },
+      e2e: { command: 'just e2e', cache: false },
       ci: { command: '', dependsOn: ['check', 'build', 'test'] },
     },
   },

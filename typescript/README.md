@@ -117,18 +117,18 @@ From `typescript/`, `vp test run` defaults to the `native` project, and `vp test
 Use `vp run test:vitest-package` to build and smoke-test both exported package entrypoints, or `vp test run --project package` when the build is already available.
 Use `vp test run --project docker` for Docker acceptance against the existing caller-built image.
 The explicit [Docker tests](test/docker.test.ts) register the six shared cases separately and verify distinct identities, exact file bytes/mode, removal of scenario and lease containers, and preservation of the caller-owned image.
-The `e2e` aggregate depends on `e2e:vitest`, which selects the Docker project against the existing image.
-Both tasks disable Vite+ task caching so every invocation observes the current Docker daemon rather than replaying earlier success output, and neither builds the image itself.
+The `e2e` task directly selects the Docker project against the existing image.
+It disables Vite+ task caching so every invocation observes the current Docker daemon rather than replaying earlier success output, and it does not build the image itself.
 The deadline case takes approximately one minute.
 
-The package task graph minimally extends the template with base `fix`, `check`, `build`, and `test` aggregates over CLI-specific leaves.
-`fix:vp` invokes `vp check --fix`, `check:vp` invokes `vp check`, and `build:vp` invokes `vp pack`; formatting, linting, and type checking remain a single Vite+ operation rather than artificially split tasks.
+The package task graph uses direct base tasks for single commands and subdivides `test` because native and built-package tests have different prerequisites.
+`fix` invokes `vp check --fix`, `check` invokes `vp check`, and `build` invokes `vp pack`; formatting, linting, and type checking remain a single Vite+ operation rather than artificially split tasks.
 `test:vitest` selects the native project and `test:vitest-package` selects the built-package project after `build`; `test` runs both without Docker.
-`postbuild:pnpm` explicitly depends on `build` and runs a private-package-safe `vp pm pack -- --dry-run` to validate package contents after generated outputs exist.
-`ci` depends on `check`, `test`, and `postbuild:pnpm`, never Docker acceptance.
-`fix` and `fix:vp` disable caching because they mutate source files, and `e2e` and `e2e:vitest` disable caching because they observe Docker.
-The remaining tasks retain caching; `check:vp`, `test:vitest`, `test:vitest-package`, and `postbuild:pnpm` declare `output: []` because checks, tests, and a package dry-run do not produce lasting artifacts.
-The `build:vp` cache uses `input: [{ auto: true }, '!dist/**']` and `output: ['dist/**']` so generated output is not an input and can be restored on cache hits.
+`postbuild` explicitly depends on `build` and runs a private-package-safe `vp pm pack -- --dry-run` to validate package contents after generated outputs exist.
+`ci` depends on `check`, `test`, and `postbuild`, never Docker acceptance.
+`fix` disables caching because it mutates source files, and `e2e` disables caching because it observes Docker.
+The remaining tasks retain caching; `check`, `test:vitest`, `test:vitest-package`, and `postbuild` declare `output: []` because checks, tests, and a package dry-run do not produce lasting artifacts.
+The `build` cache uses `input: [{ auto: true }, '!dist/**']` and `output: ['dist/**']` so generated output is not an input and can be restored on cache hits.
 Use `vp run --no-cache ci` for fresh execution.
 
 ## Validation status

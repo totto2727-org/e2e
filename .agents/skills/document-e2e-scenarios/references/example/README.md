@@ -58,7 +58,8 @@ The typecheck consumes the built public declarations. The list command evaluates
 Vitest 5 defaults to static parsing for `list`, which cannot discover indirect `registerCases` registration. Use `--no-staticParse` for the two case names to appear.
 The static `native` project deliberately includes no Docker source. This pure consumer sample has no unit-test suite, so it exposes no native `test` task and does not manufacture a successful test run with `--passWithNoTests`.
 The static `docker` project includes only `multiple_scenarios.test.ts`. Passing a filename filter to the default native project does not opt into Docker.
-The package provides the `check:tsc` primitive, the `check` aggregate, and Docker-free `ci` depending only on `check`. Checks depend on building the local library.
+The package provides a direct `check` task invoking TypeScript and Docker-free `ci` depending only on `check`.
+Checks depend on building the local library.
 Root orchestration can select `pnpm exec vp run @totto2727/e2e-doc-examples#ci` after workspace installation.
 
 ### Rust
@@ -92,7 +93,7 @@ pnpm exec vp test run --config .agents/skills/document-e2e-scenarios/references/
 The Haskell and Rust sample-local Justfiles centralize the long build and acceptance options for each single consumer project.
 Haskell `e2e` runs `cabal test --offline` for `scenario-doc-example:test:scenarios` with direct Hspec reporting and the same root temporary build directory as `build`.
 Rust `e2e` runs its declared integration test with `--ignored --nocapture`, using the same root target directory as `build`.
-The TypeScript package exposes the same selection through `e2e:vitest` and aggregate `e2e`, both uncached and dependent on the local library build.
+The TypeScript package exposes the same selection through a direct `e2e` task, uncached and dependent on the local library build.
 These commands execute the exact sample files, not copied source or substitute test fixtures. The commands do not build, pull, or delete images.
 Root task wiring and image preparation belong to the consuming repository's coordinator, not this documentation skill.
 

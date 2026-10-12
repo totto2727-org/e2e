@@ -11,15 +11,13 @@ export default {
   },
   run: {
     tasks: {
-      'check:tsc': { command: 'tsc --project tsconfig.json', dependsOn: ['@totto2727/e2e-cli#build'] },
-      check: { command: '', dependsOn: ['check:tsc'] },
+      check: { command: 'tsc --project tsconfig.json', dependsOn: ['@totto2727/e2e-cli#build'] },
       ci: { command: '', dependsOn: ['check'] },
-      'e2e:vitest': {
+      e2e: {
         command: 'vp test run --project docker',
         dependsOn: ['@totto2727/e2e-cli#build'],
         cache: false,
       },
-      e2e: { command: '', dependsOn: ['e2e:vitest'], cache: false },
     },
   },
 }
