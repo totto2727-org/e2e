@@ -69,9 +69,10 @@ repo="$PWD"
 (cd .agents/skills/document-e2e-scenarios/references/example/rust && nix develop "$repo#rust" -c just build)
 ```
 
-The local `build` recipe compiles the exact declared integration-test source with `cargo test --offline --locked --test multiple_scenarios --no-run` against the local `cli-e2e` crate.
+The local `build` recipe compiles the exact declared integration-test source with `cargo test --locked --test multiple_scenarios --no-run` against the local `cli-e2e` crate.
+Cargo can fetch the pinned dependencies on a clean machine; `--locked` prevents changes to the committed dependency resolution. Do not require an already populated registry cache with `--offline`.
 Its explicit target directory is root `tmp/scenario-doc-examples/rust`.
-Ordinary `cargo test --offline --locked --test multiple_scenarios --target-dir ../../../../../../tmp/scenario-doc-examples/rust`, run from the sample directory, leaves the Tokio test ignored. This default exclusion does not prove either Docker case passes.
+Ordinary `cargo test --locked --test multiple_scenarios --target-dir ../../../../../../tmp/scenario-doc-examples/rust`, run from the sample directory, leaves the Tokio test ignored. This default exclusion does not prove either Docker case passes.
 The case functions use public `Environment`, `Case`, `Command`, and byte-oriented `CommandResult` and return every error to the runner.
 
 ## Explicit real Docker acceptance
