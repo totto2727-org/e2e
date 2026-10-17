@@ -19,4 +19,5 @@ jobs:
         run: |
           eval "$(nix print-dev-env "$GITHUB_WORKSPACE")"
           vp install --frozen-lockfile
+          cabal update
           vp run ci
