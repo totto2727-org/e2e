@@ -1,4 +1,4 @@
-use cli_e2e::{Command, CommandResult, Error, ScopeError, with_environment};
+use e2e::{Command, CommandResult, Error, ScopeError, with_environment};
 
 #[tokio::test]
 #[ignore = "requires caller-built example-cli:local and a Linux-container Docker Engine"]

@@ -54,7 +54,7 @@ When manual execution is useful, integrate the source into an existing consumer 
 Registry consumption remains unverified until the required packages are published.
 Keep `minimumReleaseAge: 1440` and `minimumReleaseAgeStrict: true` without bypasses.
 Keep the Vite+ catalog, Vite alias, and bundled Vitest override aligned with the template.
-Keep `allowBuilds.vite-plus: false`: the installed tools are prebuilt and need no dependency lifecycle permission.
+Do not deny Vite+ lifecycle scripts through a package-specific override without evidence.
 Review any newly required lifecycle script before granting package-specific permission.
 
 ## Tasks and caching

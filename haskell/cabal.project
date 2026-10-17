@@ -1,5 +1,5 @@
 packages: .
 test-show-details: direct
 
-package cli-e2e
+package e2e
   ghc-options: -Werror

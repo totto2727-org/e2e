@@ -1,4 +1,4 @@
-use cli_e2e::{Command, CommandResult, Error, ExecutionFailure, ScopeError, with_environment};
+use e2e::{Command, CommandResult, Error, ExecutionFailure, ScopeError, with_environment};
 use std::time::{Duration, Instant};
 
 const IMAGE: &str = "e2e-example:local";

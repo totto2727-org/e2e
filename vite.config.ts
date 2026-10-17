@@ -25,9 +25,9 @@ export default defineConfig({
   },
   run: {
     tasks: {
-      'check:vp': { command: 'vp check', dependsOn: ['@totto2727/e2e-cli#build'], cache: { output: [] } },
+      'check:vp': { command: 'vp check', dependsOn: ['@totto2727/e2e#build'], cache: { output: [] } },
       'check:nixfmt': { command: 'nixfmt --check flake.nix', cache: { output: [] } },
-      'fix:vp': { command: 'vp check --fix', dependsOn: ['@totto2727/e2e-cli#fix'], cache: false },
+      'fix:vp': { command: 'vp check --fix', dependsOn: ['@totto2727/e2e#fix'], cache: false },
       'fix:nixfmt': { command: 'nixfmt flake.nix', cache: false },
       check: {
         command: '',
@@ -36,7 +36,7 @@ export default defineConfig({
           'check:nixfmt',
           '@totto2727/e2e-go#check',
           '@totto2727/e2e-haskell#check',
-          '@totto2727/e2e-cli#check',
+          '@totto2727/e2e#check',
           '@totto2727/e2e-rust#check',
         ],
       },
@@ -50,7 +50,7 @@ export default defineConfig({
         dependsOn: [
           '@totto2727/e2e-go#build',
           '@totto2727/e2e-haskell#build',
-          '@totto2727/e2e-cli#build',
+          '@totto2727/e2e#build',
           '@totto2727/e2e-rust#build',
         ],
       },
@@ -59,7 +59,7 @@ export default defineConfig({
         dependsOn: [
           '@totto2727/e2e-go#test',
           '@totto2727/e2e-haskell#test',
-          '@totto2727/e2e-cli#test',
+          '@totto2727/e2e#test',
           '@totto2727/e2e-rust#test',
         ],
       },
@@ -67,9 +67,9 @@ export default defineConfig({
         command: 'docker build --tag e2e-example:local fixtures/cli',
         cache: false,
       },
-      ci: { command: '', dependsOn: ['check', 'build', 'test', '@totto2727/e2e-cli#postbuild'] },
+      ci: { command: '', dependsOn: ['check', 'build', 'test', '@totto2727/e2e#postbuild'] },
       e2e: {
-        command: "vp run --filter '!@totto2727/e2e' --concurrency-limit 1 e2e",
+        command: "vp run --filter '!@totto2727/e2e-workspace' --concurrency-limit 1 e2e",
         dependsOn: ['pree2e'],
         cache: false,
       },

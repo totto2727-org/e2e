@@ -1,5 +1,5 @@
 {
-  "name": "@totto2727/e2e-cli",
+  "name": "@totto2727/e2e",
   "version": "0.0.0",
   "private": true,
   "description": "Isolated Linux-container CLI E2E helpers",

@@ -23,8 +23,8 @@ Verify successful execution with an exact greeting, including its final newline.
 ### Preconditions and fixtures
 
 - The caller has built `example-cli:local` with `echo`, `false`, and a long-running default entrypoint.
-- An ordinary Vitest `test.concurrent('prints greeting', ...)` calls public `withEnvironment` from `@totto2727/e2e-cli` inside its callback, forwarding `context.signal` and receiving its own fresh container.
-- The published `@totto2727/e2e-cli` dependency supplies its public JavaScript and declaration exports through npm, without checkout paths or aliases.
+- An ordinary Vitest `test.concurrent('prints greeting', ...)` calls public `withEnvironment` from `@totto2727/e2e` inside its callback, forwarding `context.signal` and receiving its own fresh container.
+- The published `@totto2727/e2e` dependency supplies its public JavaScript and declaration exports through npm, without checkout paths or aliases.
 
 ### Execution flow
 

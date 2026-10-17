@@ -1,8 +1,8 @@
 //! Async CLI cases in fresh Testcontainers-managed Linux containers.
 //!
 //! ```no_run
-//! use cli_e2e::{Command, CommandResult, ScopeError, with_environment};
-//! # async fn example() -> Result<(), ScopeError<cli_e2e::Error>> {
+//! use e2e::{Command, CommandResult, ScopeError, with_environment};
+//! # async fn example() -> Result<(), ScopeError<e2e::Error>> {
 //! with_environment("e2e-example:local", |env| async move {
 //!     env.check_command(Command::new(["echo", "hello"]),
 //!         CommandResult { exit_code: 0, stdout: b"hello\n".to_vec(), stderr: vec![] }).await
@@ -81,7 +81,7 @@ impl Command {
                 "sh".into(),
                 "-c".into(),
                 "cd -- \"$1\" && shift && exec \"$@\"".into(),
-                "cli-e2e".into(),
+                "e2e".into(),
                 directory,
             ];
             wrapped.append(&mut args);
@@ -534,7 +534,7 @@ where
     match outcome {
         Err(payload) => {
             if let Err(error) = cleanup {
-                eprintln!("cli-e2e cleanup failed while unwinding: {error}");
+                eprintln!("e2e cleanup failed while unwinding: {error}");
             }
             std::panic::resume_unwind(payload)
         }

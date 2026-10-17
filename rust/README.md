@@ -18,14 +18,14 @@ Consumer `Cargo.toml`, after publication:
 
 ```toml
 [dev-dependencies]
-cli-e2e = "0.1"
+e2e = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
 ## Public API
 
 ```rust,no_run
-use cli_e2e::{with_environment, Command, CommandResult, Error, ScopeError};
+use e2e::{with_environment, Command, CommandResult, Error, ScopeError};
 
 #[tokio::test]
 #[ignore = "requires caller-built e2e-example:local and Docker"]

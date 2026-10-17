@@ -6,7 +6,7 @@ See [shared prerequisites](../README.md#prerequisites-and-setup), [values](../RE
 ## Setup
 
 > [!IMPORTANT]
-> The Hackage setup below requires publication of `cli-e2e` at a matching version.
+> The Hackage setup below requires publication of `e2e` at a matching version.
 > Registry availability is not verified.
 
 Consumer `cabal.project`:
@@ -26,7 +26,7 @@ test-suite greeting
   default-language: Haskell2010
   build-depends:
     base >=4.18 && <5,
-    cli-e2e >=0.1.0.0 && <0.2,
+    e2e >=0.1.0.0 && <0.2,
     hspec >=2.10 && <2.12
   build-tool-depends:
     hspec-discover:hspec-discover >=2.10 && <2.12

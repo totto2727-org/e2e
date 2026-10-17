@@ -1,6 +1,6 @@
 # TypeScript CLI E2E
 
-`@totto2727/e2e-cli` provides scoped container environments for TypeScript users writing CLI tests.
+`@totto2727/e2e` provides scoped container environments for TypeScript users writing CLI tests.
 It uses [Testcontainers for Node.js](https://node.testcontainers.org/) and implements the [shared contract](../README.md) without a test-framework dependency.
 
 ## Setup
@@ -20,7 +20,7 @@ After publication, add the dependency to your `package.json` and install it with
 ```json
 {
   "devDependencies": {
-    "@totto2727/e2e-cli": "^0.0.0"
+    "@totto2727/e2e": "^0.0.0"
   }
 }
 ```
@@ -31,7 +31,7 @@ Consumers do not build this repository.
 ## Usage
 
 ```ts
-import { withEnvironment } from '@totto2727/e2e-cli'
+import { withEnvironment } from '@totto2727/e2e'
 import { expect, test } from 'vitest'
 
 test.concurrent('greeting', async (context) => {
