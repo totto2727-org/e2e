@@ -76,7 +76,9 @@ Use `dependsOn` for multi-stage work and local Justfiles for complex options or 
 When a project and all children have no JavaScript dependency or useful cache-control requirement, use native commands for light tasks and Just for heavy procedures.
 Do not introduce Node solely for those standalone workflows.
 
-Pure tasks need complete source/configuration inputs and restorable outputs.
+Use Vite+'s automatic input tracking by leaving `cache.input` unset.
+Do not enumerate source or configuration paths unless a demonstrated input-tracking gap requires an exception.
+Declare outputs that the cache must restore.
 Disable caching for image creation and Docker execution because daemon state is not a source-file output.
 Use each tool's standard output directories and keep generated files out of commits.
 Haskell uses `dist-newstyle/`; Rust uses `target/`; TypeScript emits `dist/`.
@@ -88,9 +90,7 @@ Add individual exclusions only for a demonstrated helper limitation or cache-inp
 The TypeScript documentation example is a source snippet for a consumer project, not a root workspace member.
 Its tracked source cannot be excluded through Gitignore, so root type-aware lint excludes that snippet because its consumer dependencies are not installed here.
 Root formatting still covers it; type checking belongs to the consumer project when the snippet is integrated.
-Explicit Vite+ cache globs do not automatically exclude Gitignored files; keep generated outputs out of source inputs.
-Keep TypeScript's automatic build input tracking and `dist/**` output declaration.
-Consumers of built exports must depend on the library build and track those exports as inputs.
+Consumers of built exports must depend on the library build.
 A clean `check` or `fix` must not assume pre-existing declarations.
 
 ## Validation
