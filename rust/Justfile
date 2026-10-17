@@ -1,0 +1,32 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+default:
+    @just --list
+
+fix: fix-rustfmt fix-clippy
+
+fix-rustfmt:
+    cargo fmt --all
+
+fix-clippy:
+    cargo clippy --fix --allow-dirty --allow-staged --locked --all-targets --all-features -- -D warnings
+
+check: check-rustfmt check-clippy
+
+check-rustfmt:
+    cargo fmt --all --check
+
+check-clippy:
+    cargo clippy --locked --all-targets --all-features -- -D warnings
+
+build:
+    cargo build --locked --all-features
+
+test:
+    cargo test --locked --all-features
+
+ci: check build test
+
+# Root builds e2e-example:local. This recipe never builds or pulls an image.
+e2e:
+    cargo test --locked --all-features --test e2e -- --ignored --nocapture

@@ -1,0 +1,28 @@
+[package]
+name = "caseyard"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Small async Docker-backed CLI end-to-end test library"
+publish = ["crates-io"]
+readme = "README.md"
+repository = "https://github.com/totto2727-org/e2e"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+
+[dependencies]
+testcontainers = { version = "0.28", features = ["watchdog"] }
+futures-util = "0.3"
+tar = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }

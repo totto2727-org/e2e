@@ -1,0 +1,42 @@
+{
+  "name": "@totto2727/caseyard",
+  "version": "0.1.0",
+  "description": "Isolated Linux-container CLI E2E helpers",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/totto2727-org/e2e.git",
+    "directory": "typescript"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "dependencies": {
+    "tar-stream": "^3.2.2",
+    "testcontainers": "^12.2.1"
+  },
+  "devDependencies": {
+    "@tsconfig/node-ts": "^23.6.4",
+    "@tsconfig/strictest": "^2.0.8",
+    "@types/node": "^24.19.1",
+    "@types/tar-stream": "^3.1.5",
+    "typescript": "^7.0.2",
+    "vite-plus": "catalog:",
+    "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.21.0"
+}
