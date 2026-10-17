@@ -1,4 +1,9 @@
 {
-  "extends": "../../../../../../typescript/tsconfig.json",
-  "include": ["multiple_scenarios.test.ts", "vite.config.ts"]
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "types": ["node"]
+  }
 }

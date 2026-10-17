@@ -1,8 +1,19 @@
 # Haskell CLI E2E
 
-This guide serves Haskell users who know `IO` and Hspec, and contributors who run the package checks.
+This guide serves Haskell users who know `IO` and Hspec.
 The [root contract](../README.md) defines the shared behavior.
 `Test.CLI.E2E` is the only exposed library module.
+
+## Setup
+
+Add the checkout's `haskell/` directory to your consumer project's `cabal.project`:
+
+```cabal
+packages: . /path/to/e2e/haskell
+```
+
+Add `cli-e2e` and `hspec >=2.10 && <2.12` to your test suite's `build-depends`.
+The library requires `base >=4.18 && <5` and a running Linux-container Docker Engine.
 
 ## Use the library
 
@@ -36,13 +47,11 @@ Use this one-line `Spec.hs` as the suite entry point:
 In the Cabal test suite, set `main-is: Spec.hs`, list `GreetingSpec` in `other-modules`, and add `build-tool-depends: hspec-discover:hspec-discover >=2.10 && <2.12`.
 [`hspec-discover`](https://hspec.github.io/hspec-discover.html) generates the entry point and collects the `spec` exported by each `*Spec.hs` module.
 Test modules do not define `main`, and the library does not register tests.
-This repository uses that structure for the native suite, Docker suite, and equivalent consumer sample.
 
 Each standard Hspec `it` invokes `withEnvironment` only when the framework selects and executes it.
 Hspec owns example names, filtering, reporting, fail-fast behavior, and scheduling.
 Use `--match greeting` to execute only matching examples and `--dry-run` to list them without contacting Docker.
 For suites whose examples can run concurrently, use Hspec's `parallel` and `--jobs N` controls rather than a library-owned gate.
-The acceptance suite stays sequential because its per-example label-set audits assume exclusive ownership during each snapshot window.
 There is no `Case`, outcome list, shared runner, or `beforeAll` batch of hidden actions.
 Each helper invocation resolves its own local immutable image ID, retains it with a stopped lease, creates one fresh running container, and removes both before returning the callback value or rethrowing its exception.
 Case actions can use Hspec assertions directly.
@@ -146,43 +155,6 @@ Exec start uses an HTTP `200` close-delimited raw stream with `Tty=false`, witho
 The adapter validates fragmented eight-byte stream headers and separates stdout from stderr, then polls exec inspection under the same deadline.
 See the [official Docker Engine API](https://docs.docker.com/reference/api/engine/) and [http-client API](https://hackage.haskell.org/package/http-client/docs/Network-HTTP-Client.html).
 
-## Contributor checks
+## Development
 
-Run these commands from the repository root:
-
-```sh
-pnpm exec vp run @totto2727/e2e-haskell#check
-pnpm exec vp run @totto2727/e2e-haskell#build
-pnpm exec vp run @totto2727/e2e-haskell#test
-```
-
-`check` typechecks the library, native tests, and opt-in Docker scenarios with warnings treated as errors.
-It also checks the Cabal manifest.
-The checkout has no declared license or release maintainer, so only those two publication checks are excluded.
-This is not a claim that Hackage would accept the package.
-`test` runs Hspec against controlled HTTP/socket fixtures without Docker.
-There is no Haskell workspace template to align with; this package retains idiomatic Cabal manifests and Hspec suites rather than inventing template settings.
-The local tasks use explicit Cabal suite targets, with build outputs under `haskell/tmp/cabal/`.
-For standalone Haskell work without the JavaScript task runner, `nix develop .#haskell -c just --justfile haskell/Justfile ci` runs the same native checks.
-The root Nix shell supplies pinned GHC, Cabal, and installed compatible packages.
-The standard `build-tool-depends` declaration lets Cabal resolve the `hspec-discover` executable separately from Nix's installed libraries.
-The first test build can download that tool from Hackage, so the task recipes do not force offline mode.
-Use Cabal's `--offline` option only after the required tool source and build dependencies are cached.
-The package's published dependency bounds do not require `allow-newer`.
-
-Consumers can add this directory as a local Cabal package.
-For example, run `cabal build --builddir=tmp/cabal lib:cli-e2e` from `haskell/` within the Nix shell.
-Normal `cabal test native` does not require Docker.
-The `docker-e2e` suite is disabled unless `-fdocker-e2e` is supplied explicitly.
-The task commands select `test:native` or `-fdocker-e2e test:docker-e2e` before execution.
-Within a selected suite Hspec `--match` filters actual example execution and does not merely filter already-collected outcomes.
-
-After the caller builds `e2e-example:local`, run the separate Docker task:
-
-```sh
-pnpm exec vp run @totto2727/e2e-haskell#e2e
-```
-
-This task does not build or pull an image.
-It runs the [six common acceptance scenarios](e2e/CLISpec.md) as direct Hspec examples, checking each example's fresh container identity, removed case and lease containers, and unchanged image ID.
-The native suite is transport evidence, not Docker acceptance.
+See [Haskell maintenance](../AGENTS.md#haskell) for repository maintenance.

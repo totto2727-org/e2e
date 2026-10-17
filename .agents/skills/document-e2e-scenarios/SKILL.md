@@ -19,8 +19,9 @@ The documentation structure is language-independent. Automated discovery and cov
 - TypeScript: `multiple_scenarios.test.ts` becomes `multiple_scenarios.test.md`.
 - Rust: `multiple_scenarios.rs` becomes `multiple_scenarios.md`.
 - For Go, scenario entrypoints are functions whose names end in `Scenario` in `*_test.go` files, as required by the bundled validator.
-- For other languages, identify the named scenario functions called by independent standard-framework tests. Use their exact source identifiers, including Rust snake_case, without imposing Go naming conventions.
-- If one source file contains multiple scenarios, document them in one Markdown file with one complete second-level section per scenario function, preserving registration order.
+- For Haskell and TypeScript, use the exact display name from each `it` or `test` declaration. For Rust, use the native test function identifier, including snake_case. Do not add a separate function just to give a scenario an identifier.
+- If one source file contains multiple scenarios, document them in one Markdown file with one complete second-level section per executable test case, preserving source order.
+- Keep case-specific actions and assertions inside the standard test body. Extract helpers only for shared fixtures, lifecycle management, or assertions.
 - Write all scenario prose in English. Preserve exact output, paths, flags, argv entries, and code identifiers verbatim.
 
 ## Authoring workflow
@@ -28,18 +29,18 @@ The documentation structure is language-independent. Automated discovery and cov
 1. Read the complete scenario source, shared helpers, fixture builders, and current public library API.
 2. Read the complete source/document pair for the language in [the example index](references/example/README.md). The Go pair remains intact and the other pairs exercise the same two observable cases through their own public APIs.
 3. Copy [the scenario template](assets/scenario-test.template.md) beside the source, name it according to the naming contract, and replace its placeholders.
-4. Duplicate the complete scenario block beginning with the `##` heading once per scenario function. Define tests with the language's standard framework and call the environment helper inside their bodies. Do not introduce a library-specific case registry or document a suite wrapper as another scenario.
+4. Duplicate the complete scenario block beginning with the `##` heading once per executable test case. Define tests with the language's standard framework and call the environment helper inside their bodies. Do not introduce a library-specific case registry or document a suite wrapper as another scenario.
 5. Remove unused optional rows instead of leaving empty prose. Keep each scenario's commands, arguments, fixtures, execution flow, results, and notes inside that scenario's section.
 6. List each executable and subcommand path without arguments or options under `Commands under test`. List argument and option tokens with their purpose under `Arguments and options`, without an `Applies to` column. Put each complete invocation and its literal argv order under `Execution flow`.
 7. Separate expected results into exit status, stdout, stderr, persisted state, filesystem/link state, and non-mutation guarantees where relevant. Distinguish asserted guarantees from behavior not independently tested.
 8. Link the document back to its exact sibling source with `[source filename](./source filename)`.
-9. For Go, run `python3 scripts/validate_scenario_docs.py /absolute/path/to/scenario/package` from the skill directory. For Haskell, TypeScript, and Rust, manually check source links, registered functions, section order, placeholders, and assertions against the source. The Go validator does not validate those languages, even if it exits successfully when pointed at a mixed directory.
+9. For Go, run `python3 scripts/validate_scenario_docs.py /absolute/path/to/scenario/package` from the skill directory. For Haskell, TypeScript, and Rust, manually check source links, registered test cases, section order, placeholders, and assertions against the source. The Go validator does not validate those languages, even if it exits successfully when pointed at a mixed directory.
 10. Compile the exact consumer source against the current local library's public API, then execute its explicit Docker test entrypoint when Docker validation is authorized. See the example index for separate compile and Docker commands.
 11. Read the finished document against the source once more. Neither a structural check nor compilation proves semantic truth or successful Docker acceptance. Report which checks actually ran.
 
 ## Required sections
 
-Create one second-level heading for each scenario function, using `##` followed by the backtick-wrapped source identifier and preserving registration order. Under every scenario heading, use these third-level headings exactly and in this order:
+Create one second-level heading for each executable test case, using `##` followed by its backtick-wrapped display name (Haskell or TypeScript) or native test function identifier (Go or Rust), preserving source order. Under every scenario heading, use these third-level headings exactly and in this order:
 
 1. `### Scope`
 2. `### Commands under test`
@@ -70,6 +71,6 @@ There is no bundled Haskell, TypeScript, or Rust coverage parser. Do not claim m
 
 - If a command or expectation cannot be derived from the source, inspect the called helper or fixture instead of guessing.
 - If the scenario intentionally accepts multiple outputs, document only the invariant substring or shape the test actually asserts.
-- If a sibling document covers multiple scenario functions, keep each scenario self-contained rather than grouping commands or expectations across scenarios.
+- If a sibling document covers multiple test cases, keep each scenario self-contained rather than grouping commands or expectations across scenarios.
 - If the Go validator discovers a helper-only file accidentally, rename the helper so only executable scenario entrypoints end in `Scenario`.
 - Keep native checks free of Docker execution. TypeScript requires explicit Docker project selection, Rust Docker tests are ignored by default, and Haskell consumer Docker execution must remain a separately selected suite/task.

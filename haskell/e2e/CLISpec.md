@@ -10,7 +10,7 @@ The private test-only Engine audit snapshots the caller image ID and all `org.e2
 These audits assume sequential examples and no other Haskell Docker invocation during their snapshot windows.
 The library itself has no concurrency gate. Consumers without snapshot audits can use Hspec `parallel` and `--jobs N`.
 
-## `greetingScenario`
+## `greeting`
 
 ### Scope
 
@@ -30,7 +30,7 @@ Verify the exact greeting through Hspec example `greeting`.
 
 ### Preconditions and fixtures
 
-The caller builds `e2e-example:local` from the [Go example Dockerfile](../../go/example/Dockerfile), providing `/workspace`, Linux tools, and a `sleep infinity` entrypoint.
+The caller builds `e2e-example:local` from the [shared CLI Dockerfile](../../fixtures/cli/Dockerfile), providing `/workspace`, Linux tools, and a `sleep infinity` entrypoint.
 The helper does not build, pull, or remove the image.
 
 ### Execution flow
@@ -49,7 +49,7 @@ No filesystem mutation is asserted.
 All command result fields are compared byte-for-byte.
 The per-example audits assert removal of the running container and stopped lease and preservation of the image ID.
 
-## `fileWorkflowScenario`
+## `file workflow`
 
 ### Scope
 
@@ -96,7 +96,7 @@ The binary file contains exactly bytes `00 ff 0a` and has mode `0644`.
 The fixture parent must exist before archive transfer.
 All state is confined to this fresh container and removed with it. The image remains caller-owned.
 
-## `expectedFailureScenario`
+## `expected failure`
 
 ### Scope
 
@@ -136,7 +136,7 @@ No file operations are asserted.
 Code `7` is not a transport or Docker exception.
 The result requires exec inspection, rather than the status of a host Docker process.
 
-## `separateStreamsScenario`
+## `separate streams`
 
 ### Scope
 
@@ -179,7 +179,7 @@ No cross-stream ordering or filesystem mutation is asserted.
 Streams remain strict bytes and are not merged or decoded.
 The callback's Hspec assertion failure propagates after the helper attempts cleanup.
 
-## `physicalPathsScenario`
+## `physical paths`
 
 ### Scope
 
@@ -229,7 +229,7 @@ The four deliberately incorrect path assertions throw `AssertionFailed`.
 The fixture text bytes are written but not independently read back in this scenario.
 All fixture filesystem state disappears with the case container. No host mounts are used.
 
-## `deadlineScenario`
+## `deadline`
 
 ### Scope
 

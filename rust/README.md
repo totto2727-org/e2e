@@ -3,6 +3,20 @@
 Standalone, unpublished `cli-e2e` crate using Tokio and the native [Bollard Docker Engine client](https://docs.rs/bollard/).
 It follows the [shared contract](../README.md), never invokes `docker exec`, builds or pulls images, or removes caller-owned images.
 
+## Setup
+
+Use Rust 1.88 or newer and a running Linux-container Docker Engine.
+Build your application image locally before running tests.
+Its default entrypoint must keep the container running while commands execute.
+
+Add the local crate and Tokio to your consumer's `Cargo.toml`:
+
+```toml
+[dev-dependencies]
+cli-e2e = { path = "/path/to/e2e/rust" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+```
+
 ## Public API
 
 ```rust,no_run
@@ -79,40 +93,6 @@ If ownership or absence cannot be confirmed, the typed cleanup failure is retain
 Docker contexts, SSH endpoints, Windows containers, interactive stdin, PTY and service/readiness orchestration are not supported.
 No OpenSSL or pkg-config dependencies are required.
 
-## Validation status
+## Development
 
-The scoped API migration on 2026-10-12 is validated by native formatting, linting, build, tests, rustdoc compilation, consumer-example compilation, and native test discovery.
-Real Docker acceptance of the scoped API passed on 2026-10-12 through the public root `vp run e2e` task: seven independent Tokio tests, including six common behaviors and the identity/cleanup audit, plus two exact consumer sample tests.
-The standard Cargo name filter also executed only `greeting`, with six other acceptance tests filtered out. Cleanup and image preservation passed without requiring unrelated tests to execute.
-These observations cover the local Linux-container daemon, not TLS, remote production daemons, or Windows.
-
-## Tasks and acceptance
-
-Run from repository root with the root-owned Rust Nix shell:
-
-```sh
-pnpm exec vp run @totto2727/e2e-rust#check
-pnpm exec vp run @totto2727/e2e-rust#build
-pnpm exec vp run @totto2727/e2e-rust#test
-# Root must first build e2e-example:local from go/example/Dockerfile.
-pnpm exec vp run @totto2727/e2e-rust#e2e
-```
-
-`ci` runs rustfmt, Clippy with warnings denied, build, native tests and the compiled rustdoc example.
-The local Justfile follows `template/rust-simple`, extending Cargo invocations with `--locked` and the explicit ignored acceptance target.
-All build, Clippy, and test commands enable `--all-features`; Clippy also covers `--all-targets`.
-The template's `unsafe_code = "forbid"`, denied `all`/`pedantic`, `unwrap_used`, and `expect_used` lint policies are retained.
-`rust-toolchain.toml` uses the template's stable minimal toolchain with Clippy and rustfmt.
-The crate retains its existing Rust 1.88 minimum rather than lowering it to the CLI template's 1.85.
-Build outputs are in `rust/target/`.
-For standalone Rust work without the JavaScript task runner, use `nix develop .#rust -c just --justfile rust/Justfile ci` and the module-local `fix` task.
-Native tests require no Docker and include binary chunks, exact comparisons, argv validation, archive bytes/mode, cancellation, retained cleanup failures, and real localhost HTTP fixtures for exec streams and scoped lifecycle.
-Lifecycle regressions verify generic callback values/errors, escaped environment cancellation, both synchronous and asynchronous original panic payloads after case/lease removal, and dropped-future cleanup while the runtime stays alive.
-`tests/e2e.rs` is ignored during normal tests and runs only through the explicit `e2e` task against caller-built `e2e-example:local`.
-It covers greeting, multi-command file persistence and byte copy, expected exit `7`, separated streams plus working directory/environment, physical and literal/dangling paths, and the default 60-second command deadline.
-The independent identity/isolation test asserts distinct container IDs, scope-owner-specific residual scenario/lease checks that remain valid under filtering or concurrent tests, and caller-image preservation.
-Select one native case without invoking unrelated cases: `cargo test --locked --all-features --test e2e greeting -- --ignored --exact`.
-List the seven independent acceptance tests without Docker: `cargo test --locked --all-features --test e2e -- --list`.
-Native transport tests are not real Docker acceptance.
-
-API references consulted through the repository doc-search workflow: [Bollard source](https://github.com/fussybeaver/bollard), [Docker Engine API](https://docs.docker.com/reference/api/engine/).
+See [Rust maintenance](../AGENTS.md#rust) for repository maintenance.

@@ -5,12 +5,5 @@
     "module": "NodeNext",
     "noEmit": true,
     "types": ["node"]
-  },
-  "include": [
-    "vite.config.ts",
-    "go/vite.config.ts",
-    "go/example/vite.config.ts",
-    "haskell/vite.config.ts",
-    "rust/vite.config.ts"
-  ]
+  }
 }

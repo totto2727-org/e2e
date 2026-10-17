@@ -1,0 +1,5 @@
+packages: .
+test-show-details: direct
+
+package cli-e2e
+  ghc-options: -Werror

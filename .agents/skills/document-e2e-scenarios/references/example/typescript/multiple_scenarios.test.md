@@ -2,7 +2,7 @@
 
 Source: [multiple_scenarios.test.ts](./multiple_scenarios.test.ts)
 
-## `printsGreetingScenario`
+## `prints greeting`
 
 ### Scope
 
@@ -24,12 +24,12 @@ Verify successful execution with an exact greeting, including its final newline.
 
 - The caller has built `example-cli:local` with `echo`, `false`, and a long-running default entrypoint.
 - An ordinary Vitest `test.concurrent('prints greeting', ...)` calls public `withEnvironment` from `@totto2727/e2e-cli` inside its callback, forwarding `context.signal` and receiving its own fresh container.
-- The private workspace dependency resolves public imports to the checkout's built package exports, without aliases or a registry library.
-- See [build and project selection instructions](../README.md).
+- The local `file:` dependency resolves public imports to the checkout's built package exports, without aliases or a registry library.
+- See the [manual setup instructions](../README.md).
 
 ### Execution flow
 
-1. Inside the standard Vitest test callback, await `withEnvironment('example-cli:local', printsGreetingScenario, context.signal)`.
+1. Inside the standard Vitest test callback, await `withEnvironment` with the image name, an inline command-and-assertion callback, and `context.signal`.
 2. Await `environment.checkCommand` with literal argv `['echo', 'hello from e2e']`, no working-directory override, and no environment overrides.
 3. Compare all actual fields with `{ exitCode: 0, stdout: 'hello from e2e\n', stderr: '' }`.
 
@@ -45,10 +45,12 @@ Verify successful execution with an exact greeting, including its final newline.
 ### Notes
 
 - Expected strings are assertion values, never replacements for Docker execution.
-- Vitest controls concurrent scheduling, so source order is not a timing dependency. The consumer Docker project sets `testTimeout: 125_000` to allow the 60-second lifecycle budget and two independent 30-second cleanup budgets.
-- The `native` project never includes this Docker-bearing source. Explicitly select `docker` to execute it.
+- Vitest controls concurrent scheduling, so source order is not a timing dependency.
+- The sample sets `testTimeout: 125_000` to allow the 60-second lifecycle budget and two independent 30-second cleanup budgets.
+- Run `pnpm exec vitest run` manually from this directory after setup.
+- This sample has no Vitest project selection or root task registration.
 
-## `returnsExpectedFailureScenario`
+## `returns expected failure`
 
 ### Scope
 
@@ -73,7 +75,7 @@ Verify that an expected nonzero application status does not become a harness fai
 
 ### Execution flow
 
-1. Inside the separate standard Vitest test callback, await `withEnvironment('example-cli:local', returnsExpectedFailureScenario, context.signal)`.
+1. Inside the separate standard Vitest test callback, await `withEnvironment` with the image name, an inline command-and-assertion callback, and `context.signal`.
 2. Await `environment.checkCommand` with literal argv `['false']`, retaining the image working directory and default environment.
 3. Compare all actual fields with `{ exitCode: 1, stdout: '', stderr: '' }`.
 

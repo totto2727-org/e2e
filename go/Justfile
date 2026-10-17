@@ -5,16 +5,27 @@ default:
 
 fix:
     golangci-lint fmt
-    golangci-lint run --fix ./...
+    golangci-lint run --build-tags=e2e --fix ./...
 
 check:
     golangci-lint fmt --diff
-    golangci-lint run ./...
+    golangci-lint run --build-tags=e2e ./...
+    go test -race -tags=e2e -run '^$' ./e2e
 
 build:
     go build ./...
 
 test:
     go test -race ./...
+
+# The caller prepares e2e-example:local before selecting Docker acceptance.
+e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    image_id=$(docker image inspect e2e-example:local --format '{{{{.Id}}')
+    go test -race -tags=e2e -v -shuffle=on -count=1 -parallel=2 -timeout=5m ./e2e
+    test "$image_id" = "$(docker image inspect e2e-example:local --format '{{{{.Id}}')"
+    remaining=$(docker ps --all --filter "ancestor=$image_id" --format '{{{{.ID}}')
+    test -z "$remaining"
 
 ci: check build test

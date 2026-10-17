@@ -1,112 +1,120 @@
-# Equivalent CLI scenario examples
+# CLI scenario examples
 
-These complete consumer source/document pairs exercise the same two cases through the current public APIs:
+These optional examples use the public APIs to test the same two behaviors.
+Each example is a separate consumer that you run manually from its own directory.
+They are not members of the root pnpm workspace and are not dependencies of root CI or E2E tasks.
 
-| Language   | Source                                                                | Sibling document                                                      | Local dependency                                                                                      |
-| ---------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Go         | [multiple_scenarios_test.go](./multiple_scenarios_test.go)            | [multiple_scenarios_test.md](./multiple_scenarios_test.md)            | `github.com/totto2727-org/e2e/go/cli`                                                                 |
-| Haskell    | [MultipleScenariosSpec.hs](./haskell/MultipleScenariosSpec.hs)        | [MultipleScenariosSpec.md](./haskell/MultipleScenariosSpec.md)        | [Cabal project](./haskell/cabal.project) selects this consumer and the checkout's Haskell library     |
-| TypeScript | [multiple_scenarios.test.ts](./typescript/multiple_scenarios.test.ts) | [multiple_scenarios.test.md](./typescript/multiple_scenarios.test.md) | [Private workspace package](./typescript/package.json) depends on the checkout's `@totto2727/e2e-cli` |
-| Rust       | [multiple_scenarios.rs](./rust/multiple_scenarios.rs)                 | [multiple_scenarios.md](./rust/multiple_scenarios.md)                 | [Cargo manifest](./rust/Cargo.toml) selects the checkout's Rust library by path                       |
+| Language   | Source                                                              | Scenario document                                                   | Local SDK dependency                                    |
+| ---------- | ------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------- |
+| Go         | [multiple_scenarios_test.go](multiple_scenarios_test.go)            | [multiple_scenarios_test.md](multiple_scenarios_test.md)            | [go.mod](go.mod) replacement                            |
+| Haskell    | [MultipleScenariosSpec.hs](haskell/MultipleScenariosSpec.hs)        | [MultipleScenariosSpec.md](haskell/MultipleScenariosSpec.md)        | [cabal.project](haskell/cabal.project) package          |
+| TypeScript | [multiple_scenarios.test.ts](typescript/multiple_scenarios.test.ts) | [multiple_scenarios.test.md](typescript/multiple_scenarios.test.md) | [package.json](typescript/package.json) file dependency |
+| Rust       | [multiple_scenarios.rs](rust/multiple_scenarios.rs)                 | [multiple_scenarios.md](rust/multiple_scenarios.md)                 | [Cargo.toml](rust/Cargo.toml) path dependency           |
 
-Each standard test framework registers the separate `prints greeting` and `returns expected failure` tests. Each test invokes its library's scoped environment helper with `example-cli:local`.
-The greeting case executes literal argv `echo`, `hello from e2e` and asserts exit `0`, exact stdout `hello from e2e\n`, and empty stderr.
-The failure case executes literal argv `false` and asserts exit `1` and two empty streams.
-Each test gets a distinct fresh container from its environment helper, not a shared application container. The library does not register tests, schedule parallelism, or collect outcomes.
-The source assertions observe real library execution. None of the examples supplies fake command output, duplicates a Docker backend, or uses host `docker exec` status.
-The libraries own container cleanup and retain the caller's image. These minimal consumers do not independently inspect identities or cleanup and do not assert filesystem state.
+Each test defines its operations and assertions directly inside the standard framework's test body.
+The greeting test runs `echo 'hello from e2e'` as literal argv and checks exit code `0`, stdout `hello from e2e\n`, and empty stderr.
+The failure test runs `false` and checks exit code `1` and two empty streams.
+Each scoped helper creates and cleans up its own container.
+These small examples do not independently audit container identities or filesystem state.
 
-## Prerequisites and boundaries
+## Preparation
 
-Run commands below from the repository root unless the command explicitly changes directories.
-Use the repository's Nix shells for the pinned toolchains and installed Haskell dependencies.
-Install TypeScript dependencies through the authoritative root pnpm workspace and lockfile, keeping the root release-age safeguards in force.
-The workspace must include `.agents/skills/document-e2e-scenarios/references/example/typescript` before installing. Its package name is `@totto2727/e2e-doc-examples`.
-The TypeScript consumer uses the real public package export without source or distribution aliases. Vitest's own `test` defines each case. Build the local library before checking or collecting the consumer.
-Haskell and Rust use their lightweight local consumer manifests without requiring registry publication of either library.
-Build artifacts belong under root `tmp/scenario-doc-examples/`. The Rust consumer lockfile is retained so subsequent builds can use `--locked`.
+See the [library requirements](../../../../../README.md#prerequisites-and-setup) and [development environment](../../../../../AGENTS.md#development-setup).
+The development shell supplies GHC and Cabal, not preinstalled Haskell library dependencies.
+Cabal resolves dependencies from the manifests.
+Rustup selects the Rust toolchain.
 
-Docker is needed only for the explicit acceptance commands.
-The caller must already have built `example-cli:local` with `echo`, `false`, and a long-running default entrypoint. Image preparation remains outside the samples.
-Set `DOCKER_HOST` to the actual local Linux-container daemon endpoint if it differs from the language's default. Do not assume the libraries read Docker CLI contexts or offer identical transports.
-See the language READMEs for each adapter's supported endpoints and limitations.
-
-## Compile exact consumer sources without Docker
-
-### Haskell
+Docker is required only when you execute the tests, not when you compile or list them.
+From the repository root, prepare the caller-owned image once:
 
 ```sh
-repo="$PWD"
-cd .agents/skills/document-e2e-scenarios/references/example/haskell
-nix develop "$repo#haskell" -c just build
+docker build --tag example-cli:local fixtures/cli
 ```
 
-This compiles and links the exact `MultipleScenariosSpec.hs` with warnings treated as errors, depending on the exposed local `Test.CLI.E2E` module through Cabal rather than copying library sources.
-The sample exports `spec`; its one-line `Spec.hs` entry point uses `hspec-discover` to generate `main` and collect the tests.
-Building does not execute examples or contact Docker.
-Each Hspec `it` invokes `withEnvironment` inside its test body. Hspec name filters select the body before any Docker operation, and assertions retain Hspec's normal reporting.
-Do not include this consumer suite in a native `cabal test all` task: it is intentionally Docker-bearing when executed.
+Set `DOCKER_HOST` if required by your daemon setup.
+Consult each language's README for supported transports.
+The examples do not prepare, pull, or delete application images.
 
-### TypeScript
+## Go
+
+From this directory:
 
 ```sh
-pnpm exec vp run @totto2727/e2e-cli#build
-pnpm exec tsc --project .agents/skills/document-e2e-scenarios/references/example/typescript/tsconfig.json
-pnpm exec vp test list --config .agents/skills/document-e2e-scenarios/references/example/typescript/vite.config.ts --project docker
+# Compile without running Docker tests.
+go test -race -run '^$' ./...
+
+# Execute both tests against Docker.
+go test -race ./...
 ```
 
-The typecheck consumes the built public declarations. The standard list command discovers the two direct Vitest test definitions without running test bodies or Docker setup. No indirect-registration workaround is required.
-The static `native` project deliberately includes no Docker source. This pure consumer sample has no unit-test suite, so it exposes no native `test` task and does not manufacture a successful test run with `--passWithNoTests`.
-The static `docker` project includes only `multiple_scenarios.test.ts`. Passing a filename filter to the default native project does not opt into Docker.
-The package provides a direct `check` task invoking TypeScript and Docker-free `ci` depending only on `check`.
-Checks depend on building the local library.
-Root orchestration can select `pnpm exec vp run @totto2727/e2e-doc-examples#ci` after workspace installation.
+The local module and checksums make this directory independently executable.
 
-### Rust
+## Haskell
+
+From `haskell/`:
 
 ```sh
-repo="$PWD"
-(cd .agents/skills/document-e2e-scenarios/references/example/rust && nix develop "$repo#rust" -c just build)
+# Compile without executing examples.
+cabal build
+
+# Execute both Hspec examples against Docker.
+cabal test
 ```
 
-The local `build` recipe compiles the exact declared integration-test source with `cargo test --locked --test multiple_scenarios --no-run` against the local `cli-e2e` crate.
-Cargo can fetch the pinned dependencies on a clean machine; `--locked` prevents changes to the committed dependency resolution. Do not require an already populated registry cache with `--offline`.
-Its explicit target directory is root `tmp/scenario-doc-examples/rust`.
-Ordinary `cargo test --locked --test multiple_scenarios --target-dir ../../../../../../tmp/scenario-doc-examples/rust`, run from the sample directory, leaves both Tokio tests ignored. This default exclusion does not prove either Docker case passes.
-Each individual `#[tokio::test]` uses public `with_environment`, `Environment`, `Command`, and byte-oriented `CommandResult`. Rust's standard harness selects and reports each test independently.
+The sample exports `spec` with direct `it` bodies.
+The one-line `Spec.hs` uses `hspec-discover` to generate the executable entry point.
+The local Cabal project enables the sample suite and direct reporting, so repeated selection and output-directory options are unnecessary.
 
-## Explicit real Docker acceptance
+## TypeScript
 
-After the caller prepares the image, execute these separately from native CI and only when Docker acceptance is authorized:
+Build the local SDK first, from the repository's `typescript/` directory:
 
 ```sh
-# Haskell, from the repository root:
-repo="$PWD"
-(cd .agents/skills/document-e2e-scenarios/references/example/haskell && nix develop "$repo#haskell" -c just e2e)
-
-# TypeScript, after the local library build and workspace install:
-pnpm exec vp test run --config .agents/skills/document-e2e-scenarios/references/example/typescript/vite.config.ts --project docker
-
-# Rust, selecting the ignored consumer tests:
-(cd .agents/skills/document-e2e-scenarios/references/example/rust && nix develop "$repo#rust" -c just e2e)
+pnpm exec vp pack
 ```
 
-The Haskell and Rust sample-local Justfiles centralize the long build and acceptance options for each single consumer project.
-Haskell `e2e` runs `cabal test` for `scenario-doc-example:test:scenarios` with direct Hspec reporting and the same root temporary build directory as `build`.
-The first build can download the declared `hspec-discover` build tool; offline execution requires that dependency to be cached first.
-Rust `e2e` runs its declared integration test with `--ignored --nocapture`, using the same root target directory as `build`.
-The TypeScript package exposes the same selection through a direct `e2e` task, uncached and dependent on the local library build.
-These commands execute the exact sample files, not copied source or substitute test fixtures. The commands do not build, pull, or delete images.
-Root task wiring and image preparation belong to the consuming repository's coordinator, not this documentation skill.
+Then run these commands from this example's `typescript/` directory:
 
-## Documentation validation limits
+```sh
+pnpm install
+pnpm exec tsc --noEmit
+
+# Collect ordinary Vitest test definitions without running Docker operations.
+pnpm exec vitest list
+
+# Execute both tests against Docker.
+pnpm exec vitest run
+```
+
+The local pnpm configuration isolates installation from the root workspace and retains the 24-hour dependency release-age policy.
+The file dependency consumes the SDK's built public export without source aliases.
+There is no sample task graph or artificial native test suite.
+
+## Rust
+
+From `rust/`:
+
+```sh
+# Compile without executing Docker tests.
+cargo test --locked --no-run
+
+# Execute both ignored tests against Docker.
+cargo test --locked -- --ignored --nocapture
+```
+
+The committed consumer lockfile makes `--locked` usable on a clean machine.
+Ordinary `cargo test --locked` leaves both Docker-bearing tests ignored.
+Build outputs stay in each sample's standard local output directory and are not committed.
+
+## Scenario document validation
+
+From the repository root:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 .agents/skills/document-e2e-scenarios/scripts/validate_scenario_docs.py .agents/skills/document-e2e-scenarios/references/example
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .agents/skills/document-e2e-scenarios/scripts -p 'test_*.py'
 ```
 
-The bundled validator discovers the Go source/document pair only. Its success does not validate Haskell, TypeScript, or Rust coverage and never proves semantic truth.
-Review each non-Go document against its exact source and registered functions, checking sibling links, section order, literal argv, expected status, stream bytes/text, fixtures, and stated non-assertions.
-Compilation validates public interface compatibility. Collection validates registered names. Only actual Docker execution validates these observable cases against the prepared image.
-Report compilation, document review, collection, and acceptance separately rather than claiming that one substitutes for another.
+The bundled validator checks the Go pair only.
+Review the other documents against their source, including test names, order, argv, status, streams, and stated non-assertions.
+Compilation checks public API compatibility, collection checks names, and Docker execution checks the actual behavior.
+None substitutes for the others.

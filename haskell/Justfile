@@ -3,18 +3,18 @@ default:
 
 # Use the root Nix shell before these recipes.
 check:
-    cabal build --builddir=tmp/cabal -fdocker-e2e lib:cli-e2e test:native test:docker-e2e --ghc-options=-Werror
+    cabal build -fdocker-e2e lib:cli-e2e test:native test:docker-e2e
     # This checkout declares neither a license nor a release maintainer.
     cabal check --ignore=license-none --ignore=no-maintainer
 
 build:
-    cabal build --builddir=tmp/cabal lib:cli-e2e --ghc-options=-Werror
+    cabal build lib:cli-e2e
 
 test:
-    cabal test --builddir=tmp/cabal test:native --ghc-options=-Werror --test-show-details=direct
+    cabal test native
 
 # The caller must build e2e-example:local before this explicit task.
 e2e:
-    cabal test --builddir=tmp/cabal -fdocker-e2e test:docker-e2e --ghc-options=-Werror --test-show-details=direct
+    cabal test -fdocker-e2e docker-e2e
 
 ci: check build test

@@ -1,4 +1,4 @@
-module github.com/totto2727-org/e2e/go/example
+module github.com/totto2727-org/e2e/scenario-doc-example
 
 go 1.25.0
 
@@ -58,4 +58,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/totto2727-org/e2e/go => ..
+replace github.com/totto2727-org/e2e/go => ../../../../../go

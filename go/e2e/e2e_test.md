@@ -3,8 +3,12 @@
 Source: [e2e_test.go](./e2e_test.go)
 
 This document is for contributors who maintain the Docker-backed acceptance tests.
-Each standard Go test calls `cli.NewEnvironment(t, "e2e-example:local")` inside its body after `t.Parallel()`, receiving a fresh container and its own immutable image lease.
-The consumer's `go test -parallel=2` setting controls concurrency, not the library.
+The source lives at `go/e2e/e2e_test.go` in the same Go module as the implementation and is selected with the standard `e2e` build tag, not a separate example module.
+From `go/`, run `go test -race -tags=e2e -parallel=2 ./e2e` after building `e2e-example:local` from `fixtures/cli/Dockerfile` at the repository root.
+Ordinary untagged `go test` excludes these Docker-backed tests.
+The six single-container tests call `cli.NewEnvironment(t, "e2e-example:local")` inside their bodies after `t.Parallel()`, receiving a fresh container and their own immutable image leases.
+The seventh test uses two sequential `t.Run` child scopes, each with its own environment and cleanup.
+The standard `go test -parallel=2` setting controls concurrency, not the library.
 
 ## `TestStdoutScenario`
 
@@ -269,3 +273,56 @@ Check that a command with an open output connection returns when the case deadli
 - Closing an exec connection does not itself signal the process to exit.
 - Container cleanup stops the remaining process after the test returns, using a fresh 30-second context.
 - This case adds approximately one minute to the Docker-backed test run.
+
+## `TestIsolationScenario`
+
+### Scope
+
+Check that two sequential native child test scopes observe distinct container hostnames and do not share a file marker.
+
+### Commands under test
+
+| Command path | Purpose                                      |
+| ------------ | -------------------------------------------- |
+| `cat`        | Read the container's observed hostname.      |
+| `test`       | Check marker absence through `CheckMissing`. |
+
+### Arguments and options
+
+| Argument or option                | Purpose                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| `/etc/hostname`                   | Read the hostname supplied to each container.                             |
+| `/workspace/isolation-marker.txt` | Select the marker written only in the first child scope.                  |
+| `-e`, `-L`                        | Probe marker existence and symbolic-link presence through `CheckMissing`. |
+
+### Preconditions and fixtures
+
+- The caller has built `e2e-example:local` from the shared `fixtures/cli/Dockerfile`.
+- The image provides `cat`, `test`, and `/workspace`, and Docker supplies `/etc/hostname`.
+- The parent test calls `t.Parallel()`, but neither child calls `t.Parallel()`.
+- Each child calls `cli.NewEnvironment(t, "e2e-example:local")` inside its body so cleanup belongs to that child scope.
+
+### Execution flow
+
+1. Enter `t.Run("first", ...)` and create its environment.
+2. Run argv `["cat", "/etc/hostname"]`, check its Go error and result, and retain the exact stdout in the parent test's local variable.
+3. Call `CheckMissing("/workspace/isolation-marker.txt")`.
+4. Call `WriteFile("/workspace/isolation-marker.txt", []byte("first case\n"))`, then `CheckFile` with the same path and exact bytes.
+5. Return from the first child so its registered cleanup finishes before `t.Run` returns. If that child fails, return from the parent without starting the second child.
+6. Enter `t.Run("second", ...)`, create a new environment, and run argv `["cat", "/etc/hostname"]`.
+7. Check the Go error and command result, then compare the observed stdout with the first child's stdout.
+8. Call `CheckMissing("/workspace/isolation-marker.txt")` in the second environment, then return so its cleanup runs.
+
+### Expected results
+
+- Both hostname commands return no Go error, exit code `0`, and exactly empty stderr.
+- Each hostname stdout is nonempty after `strings.TrimSpace`. No fixed hostname value or newline shape is asserted.
+- The two exact hostname stdout values differ.
+- The marker is absent before the first write, contains exactly `first case\n` after that write, and is absent in the second container, including no dangling symbolic link at that path.
+- Every file operation and path assertion succeeds without an error.
+
+### Notes
+
+- All case-specific actions and assertions are directly inside standard `testing` test bodies.
+- `cli.NewEnvironment` owns child cleanup. The test does not add a runner, public API, or manual container removal.
+- Hostname and marker observations establish isolation through the existing public API. This scenario does not independently inspect Docker container IDs, daemon-side removal, or image retention.

@@ -2,7 +2,7 @@
 
 Source: [MultipleScenariosSpec.hs](./MultipleScenariosSpec.hs)
 
-## `printsGreetingScenario`
+## `prints greeting`
 
 ### Scope
 
@@ -28,7 +28,7 @@ Verify that the local CLI image prints the exact caller-visible greeting success
 
 ### Execution flow
 
-1. Register `printsGreetingScenario` inside the standard Hspec `it "prints greeting"` body using `withEnvironment "example-cli:local"`.
+1. Inside Hspec `it "prints greeting"`, call `withEnvironment "example-cli:local"` with an inline callback containing the command and assertion.
 2. Execute argv `["echo", "hello from e2e"]` through `checkCommand`, using the image working directory and no environment overrides.
 3. Compare the actual result with `Result 0 "hello from e2e\n" ""`.
 4. `withEnvironment` removes this invocation's running container and stopped lease before returning or rethrowing the original example exception.
@@ -49,7 +49,7 @@ Verify that the local CLI image prints the exact caller-visible greeting success
 - Hspec owns scheduling. This sample is sequential by default, and a consumer can use Hspec `parallel` and `--jobs N` for independent examples.
 - Hspec `--match` selects actual execution and `--dry-run` performs no Docker operations. There is no pre-run outcome aggregation.
 
-## `returnsExpectedFailureScenario`
+## `returns expected failure`
 
 ### Scope
 
@@ -74,7 +74,7 @@ Verify that a nonzero application result is observable and can be asserted as th
 
 ### Execution flow
 
-1. Register `returnsExpectedFailureScenario` in Hspec `it "returns expected failure"` using `withEnvironment "example-cli:local"`.
+1. Inside Hspec `it "returns expected failure"`, call `withEnvironment "example-cli:local"` with an inline callback containing the command and assertion.
 2. Execute argv `["false"]` through `checkCommand` with the image working directory and no environment overrides.
 3. Compare the actual result with `Result 1 "" ""`.
 4. Finish cleanup before returning to Hspec, preserving the original callback exception if the example failed.

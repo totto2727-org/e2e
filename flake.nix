@@ -44,29 +44,12 @@
             pkgs.pnpm
             pkgs.vite-plus
           ];
-          rustTools = [
-            pkgs.cargo
-            pkgs.rustc
-            pkgs.rustfmt
-            pkgs.clippy
-          ];
+          rustTools = [ pkgs.rustup ];
           haskellTools = [
-            (pkgs.haskellPackages.ghcWithPackages (
-              p: with p; [
-                aeson
-                async
-                bytestring
-                containers
-                filepath
-                hspec
-                http-client
-                http-types
-                network
-                tar
-                text
-              ]
-            ))
+            pkgs.ghc
             pkgs.cabal-install
+            pkgs.zlib
+            pkgs.pkg-config
           ];
         in
         {

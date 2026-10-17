@@ -1,1 +1,5 @@
 packages: . ../../../../../../haskell
+
+package scenario-doc-example
+  tests: True
+  test-show-details: direct

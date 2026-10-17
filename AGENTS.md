@@ -1,67 +1,177 @@
-# e2e
+# e2e maintenance
+
+These instructions apply when changing this repository.
+For installation, public API behavior, and consumer requirements, use the [root README](./README.md) and its language guides.
 
 ## Repository structure
 
-```text
-go/          Go module and independent Docker example module.
-haskell/     Haskell library and Hspec tests.
-typescript/  TypeScript library and Vitest integration.
-rust/        Rust library and asynchronous tests.
+| Path                                                        | Maintained content                                                   |
+| ----------------------------------------------------------- | -------------------------------------------------------------------- |
+| `go/cli/`                                                   | Go library and native tests.                                         |
+| `go/e2e/`                                                   | Go Docker tests, selected with the `e2e` build tag.                  |
+| `haskell/src/`, `haskell/test/`, `haskell/e2e/`             | Haskell library, native Hspec specs, and Docker Hspec specs.         |
+| `typescript/src/`, `typescript/test/`                       | TypeScript library and native, package, and Docker Vitest projects.  |
+| `rust/src/`, `rust/tests/`                                  | Rust library and native or ignored Docker tests.                     |
+| `fixtures/cli/Dockerfile`                                   | Shared Linux application image for acceptance tests.                 |
+| `.agents/skills/document-e2e-scenarios/references/example/` | Equivalent public-API consumer examples and their sibling documents. |
+
+Keep the language-independent public contract in the root README and concrete APIs in language READMEs.
+Put development setup, toolchains, architecture constraints, and repository verification here, not in consumer READMEs.
+Do not retain dated verification reports, migration tables, or progress logs in these entry documents.
+
+## Development setup
+
+Run root tasks from the repository root.
+Enter `nix develop` for repository tools, or select `nix develop .#go`, `.#haskell`, `.#typescript`, or `.#rust` for standalone native work.
+Nix provides GHC, Cabal, and native build dependencies such as zlib.
+Cabal owns Haskell library dependencies.
+Nix provides `rustup`.
+`rust/rust-toolchain.toml` owns the Rust toolchain and components.
+The default shell includes Node, pnpm, Vite+, Just, Go, GHC, Cabal, Cargo, linters, and formatters.
+Docker must be available for explicit E2E execution.
+
+```sh
+nix develop
+vp install --frozen-lockfile
+vp run ci
 ```
 
-The root README defines the language-independent contract and implementation status.
-Each language README documents its concrete public API and supported Docker transports.
-Keep language-specific implementation details out of the common contract.
+The root pnpm workspace and `pnpm-lock.yaml` cover the libraries and repository tools only.
+Keep documentation examples out of workspace membership, root dependencies, and task graphs.
+Run examples manually from their own directories when changing them, using the [example instructions](./.agents/skills/document-e2e-scenarios/references/example/README.md).
+Keep `minimumReleaseAge: 1440` and `minimumReleaseAgeStrict: true` without bypasses.
+Keep the Vite+ catalog, Vite alias, and bundled Vitest override aligned with the template.
+Keep `allowBuilds.vite-plus: false`: the installed tools are prebuilt and need no dependency lifecycle permission.
+Review any newly required lifecycle script before granting package-specific permission.
 
-## Development commands
+## Tasks and caching
 
-- Run root tasks from the repository root.
-- Enter the toolchain with `nix develop` or select a smaller shell with `nix develop .#go`, `.#haskell`, `.#typescript`, or `.#rust`.
-- Install the root workspace with `vp install --frozen-lockfile`.
-- Use Vite+ for cross-project dependencies and caching. Keep complex implementation-specific procedures in language-local Justfiles.
-- Put lightweight commands directly in `vite.config.ts`; express multi-stage work with `dependsOn` instead of parallel task-runner hierarchies.
-- Put a single command directly in its base category task. Add CLI or case suffixes and aggregates only when multiple tools or independently useful stages need subdivision.
-- `vp run fix` formats and autofixes supported implementations.
-- `vp run check` checks formatting and lint findings.
-- `vp run build` builds each implementation.
-- `vp run test` runs tests that do not need Docker.
-- `vp run ci` runs checks, builds, package validation, and native tests without Docker.
-- `vp run e2e` is the explicit Docker acceptance entry point.
-- Select one workspace task with its package name, such as `vp run @totto2727/e2e-rust#ci`.
-- Keep native-only standalone workflows JavaScript-independent. When a project and every child have no JS dependencies and no useful cache-control need, use native commands for light tasks and local Just recipes for heavy procedures.
-- Keep pure task caching enabled with complete source/configuration inputs and restorable outputs. Disable caching for mutations, image creation, and Docker acceptance.
-- Derive Vite+ formatter and linter exclusions with `@totto2727/gitignore-patterns` from the repository's `.gitignore` files. Keep the shared blocks in the root configuration. Add individual exclusions only for demonstrated helper limitations or cache-input gaps, and document the affected consumer and evidence.
-- Select native and Docker tests through standard project, suite, package, or ignored-test command options, not environment-dependent discovery.
-- Keep Docker tests out of the aggregate `ci` task.
-- Keep temporary outputs under `tmp/` and do not commit them.
-- Start from the corresponding workspace template and make only necessary library-specific extensions. There is no Haskell template in this workspace.
+| Task            | Purpose                                                                                   |
+| --------------- | ----------------------------------------------------------------------------------------- |
+| `fix`           | Formatter and linter autofixes. Never cache mutations.                                    |
+| `check`         | Formatting, linting, and type checks. Compile Docker test sources without executing them. |
+| `build`         | Produce the application or library artifacts.                                             |
+| `test`          | Lightweight reproducible tests, including controlled transport fixtures. No Docker.       |
+| `pre*`, `post*` | Required preparation or follow-up stages, wired with explicit dependencies.               |
+| `ci`            | Checks, builds, package validation, and native tests without Docker.                      |
+| `e2e`           | Explicit, uncached Docker acceptance for the four implementations.                        |
 
-## Architecture and invariants
+Use Vite+ for cross-project orchestration and caching.
+Put a lightweight command directly in its base task.
+Add `<category>:<CLI>` tasks and an aggregate only for multiple tools or independently useful stages.
+Use `dependsOn` for multi-stage work and local Justfiles for complex options or multi-line procedures.
+When a project and all children have no JavaScript dependency or useful cache-control requirement, use native commands for light tasks and Just for heavy procedures.
+Do not introduce Node solely for those standalone workflows.
 
-- Resolve a caller-built local image without pulling, then retain its immutable ID with a stopped lease container.
-- Create a fresh container for each uniquely named case and remove all owned containers without deleting the image.
-- Keep test registration, names, selection, assertions, scheduling, and reporting in the language's standard test framework. Do not add a library-specific runner or case registry.
-- Provide a scoped environment helper inside each standard test. Let the framework control parallelism rather than imposing a library-wide scheduler.
-- Start the one-minute operation budget when the helper is invoked, before image inspection and container creation.
-- Give cleanup a fresh thirty-second total budget, including retries.
-- Pass literal argv entries and expose separate stdout, stderr, and inspected exit status.
-- Distinguish command failure from Docker, transport, framing, and cancellation errors.
-- Preserve observed partial output when reporting execution errors.
-- Own attached stream connections and close them when the case is cancelled.
-- Compare command results and file bytes exactly.
-- Keep domain-specific workflows in consumer tests rather than the reusable libraries.
-- Do not add compatibility adapters for retired APIs.
-- Do not infer application exit status from a host `docker exec` process.
-- Document transport differences instead of claiming unverified parity.
+Pure tasks need complete source/configuration inputs and restorable outputs.
+Disable caching for image creation and Docker execution because daemon state is not a source-file output.
+Use each tool's standard output directories and keep generated files out of commits.
+Haskell uses `dist-newstyle/`; Rust uses `target/`; TypeScript emits `dist/`.
+Go library builds do not need an artificial archive or executable output.
 
-## Language-specific rules
+Derive Vite+ formatter and linter exclusions from `.gitignore` through `@totto2727/gitignore-patterns`.
+Keep shared formatter and linter blocks in the root configuration.
+Add individual exclusions only for a demonstrated helper limitation or cache-input gap.
+The manual TypeScript example has its own dependency installation outside the root workspace.
+Its tracked source cannot be excluded through Gitignore, so root type-aware lint excludes that consumer only.
+Root formatting still covers it, and its own TypeScript command checks it after local installation.
+Explicit Vite+ cache globs do not automatically exclude Gitignored files; keep generated outputs out of source inputs.
+Keep TypeScript's automatic build input tracking and `dist/**` output declaration.
+Consumers of built exports must depend on the library build and track those exports as inputs.
+A clean `check` or `fix` must not assume pre-existing declarations.
 
-- Go code lives in the `github.com/totto2727-org/e2e/go` module.
-- The independent `go/example` module uses a local `replace` only for development.
-- Check every Go error and use `%w` when adding context.
-- Run Go tests with the race detector.
-- Apply the `implement-cli-e2e` and `document-e2e-scenarios` skills to consumer Go scenarios.
-- Keep sibling English scenario documents and validate them when changing scenario-bearing Go tests.
-- TypeScript uses Node, pnpm with its authoritative lockfile, release-age safeguards, and Vitest integration.
-- Keep native unit tests independent of Docker in every language.
-- Before handoff, run the affected language tasks and the corresponding real Docker acceptance task when Docker validation is requested.
+## Validation
+
+From the root Nix shell:
+
+```sh
+vp run --no-cache ci
+vp run e2e
+```
+
+`ci` checks and builds all implementations and runs native tests.
+It does not execute Docker tests or build documentation examples.
+`e2e` builds `fixtures/cli` with the `e2e-example:local` tag, then runs the four language suites sequentially.
+Use `vp run @totto2727/e2e-go#ci` or the corresponding Haskell, TypeScript, or Rust package name to select one graph.
+Standalone language Docker commands require the prebuilt fixture image.
+
+| Working directory | Native selection                                                        | Docker selection                                                         |
+| ----------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `go/`             | `go test -race ./...`                                                   | `go test -race -tags=e2e ./e2e`                                          |
+| `haskell/`        | `cabal test native`                                                     | `cabal test -fdocker-e2e docker-e2e`                                     |
+| `typescript/`     | `vp test run --project native`; package imports use `--project package` | `vp test run --project docker`                                           |
+| `rust/`           | `cargo test --locked --all-features`                                    | `cargo test --locked --all-features --test e2e -- --ignored --nocapture` |
+
+Select cases with Go `-run`, Hspec `--match`, Vitest `-t`, or Cargo's test-name filter.
+Do not use environment-dependent discovery or require a full-suite test count for cleanup audits.
+Controlled HTTP/socket tests verify transport behavior, not real Docker acceptance.
+
+Each language must verify these public behaviors against the shared image:
+
+| Case             | Required observation                                                                                      |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| Greeting         | Exact stdout, empty stderr, exit zero.                                                                    |
+| File workflow    | Multiple commands share case state; transfers preserve exact bytes and mode `0644`.                       |
+| Expected failure | Application exit `7` is a result, not an infrastructure error.                                            |
+| Separate streams | Working directory and environment reach the process; stdout and stderr remain separate on failure.        |
+| Physical paths   | Regular files, directories, missing paths, literal links, and dangling links follow the public contracts. |
+| Deadline         | An indefinite command returns a deadline error and its container is removed.                              |
+
+Also verify isolation between scopes, owned-container cleanup, and preservation of the caller's image.
+Keep assertions inside standard test bodies; extract only shared lifecycle, fixtures, or assertions.
+Use controlled native tests for invalid inputs, transport failures, partial output, comparison failures, cleanup failures, and cancellation.
+
+## Implementation constraints
+
+Follow the shared public contract without adding a library-specific runner, case registry, fixed concurrency gate, or mutable Docker-client escape hatch.
+Keep application workflows in consumer tests.
+Register ownership and cleanup immediately, including partial creation failures.
+Use unpredictable names and ownership labels when recovering a resource whose creation response was lost.
+Remove the inspected immutable resource ID only after verifying ownership.
+Each resource's cleanup has a fresh thirty-second total budget, including retries.
+Own attached stream connections and close them on cancellation.
+Do not infer application exit status from the host `docker exec` status or mix infrastructure diagnostics into command stderr.
+Keep transport support and cancellation limits explicit; do not infer parity from another backend.
+
+## Language-specific maintenance
+
+### Go
+
+The module path is `github.com/totto2727-org/e2e/go`.
+Use the race detector and check every error; wrap causes with `%w` when adding context.
+`just ci` in `go/` checks the library and compiles the tagged Docker suite without running it.
+`just e2e` runs the suite with shuffled order and checks residual containers and image preservation.
+Go's framework controls parallelism through `t.Parallel` and `-parallel`.
+
+### Haskell
+
+`just ci` in `haskell/` runs Cabal builds, manifest checks, and native Hspec tests.
+`cabal.project` supplies warnings-as-errors and direct test reporting.
+Each spec module exports `spec :: Spec`; one-line `Spec.hs` entrypoints use the declared `hspec-discover` build tool.
+Cabal can download that tool on first build; use `--offline` only with the required dependencies already cached.
+The checkout declares no license or release maintainer, so `cabal check` excludes only those publication metadata checks.
+Do not weaken dependency bounds or introduce `allow-newer` for local tooling.
+
+### TypeScript
+
+`check` uses Vite+'s type-aware checks, `build` emits bundles and declarations, and package tests import the built public entrypoint.
+Vitest remains a development dependency; the library is framework-independent.
+Keep static native, package, and Docker projects, with native selected by default.
+Use the template's TypeScript presets without enumerating configuration files individually.
+
+### Rust
+
+`just ci` in `rust/` runs rustfmt, Clippy with denied warnings, builds, native tests, and rustdoc.
+Retain locked dependencies, the existing Rust 1.88 minimum, and template lint policies, including forbidden unsafe code and denied unwrap/expect use.
+Keep Docker tests ignored by default.
+
+## Template basis and task-specific guides
+
+Start from the corresponding workspace template and make only necessary library-specific extensions.
+TypeScript follows the [Vite+ library template](https://github.com/totto2727-org/template-vite-plus-lib/tree/ef2173ab26407fdc45b4b05106b5eed561062dd1), Go the [Go template](https://github.com/totto2727-org/template-go-simple/tree/b12903f8f8bf458b93538237c2ee2016dd54865e), and Rust the [Rust template](https://github.com/totto2727-org/template-rust-simple/tree/08ffe1d2d6a27e8d0b4c25f98e5a89a96d8ec1c1).
+There is no Haskell workspace template; keep its native Cabal/Hspec configuration.
+
+- When changing consumer scenarios, follow [document-e2e-scenarios](./.agents/skills/document-e2e-scenarios/SKILL.md) and its [exact examples](./.agents/skills/document-e2e-scenarios/references/example/README.md).
+- When implementing Go CLI scenarios, also follow [implement-cli-e2e](./.agents/skills/implement-cli-e2e/SKILL.md).
+- Validate Go sibling documents with `python3 .agents/skills/document-e2e-scenarios/scripts/validate_scenario_docs.py go/e2e` and the corresponding example directory.
+- When changing README or AGENTS, follow `share-artifact` and `documentation-principles`. Keep consumer reference and maintainer instructions separate and link to the canonical document instead of duplicating it.

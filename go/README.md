@@ -1,7 +1,7 @@
 # Go CLI E2E
 
 Reusable Go helpers for non-interactive CLI end-to-end tests in isolated Testcontainers containers.
-This reference is for Go developers who use the package to write or migrate consumer tests.
+This reference is for Go developers who use the package to write consumer tests.
 See the [shared language-independent contract](../README.md) for the common behavior.
 
 ## Prerequisites
@@ -10,9 +10,22 @@ See the [shared language-independent contract](../README.md) for the common beha
 - A running Docker daemon reachable by Testcontainers.
 - A caller-built local image containing the CLI under test.
 
+## Setup
+
+Use the checkout as a local dependency in your consumer's `go.mod`:
+
+```go.mod
+require github.com/totto2727-org/e2e/go v0.0.0
+
+replace github.com/totto2727-org/e2e/go => /path/to/e2e/go
+```
+
+Replace `/path/to/e2e/go` with the checkout's Go module directory.
+The local `replace` resolves the dependency without a published release.
+
 ## Usage
 
-Add `github.com/totto2727-org/e2e/go` to your test module and build the image before starting the Go test.
+Build the image before starting the Go test.
 Import `github.com/totto2727-org/e2e/go/cli`.
 The library does not build, pull, or remove the caller's application image.
 Testcontainers may pull its resource-reaper infrastructure image according to its own configuration.
@@ -38,7 +51,7 @@ func TestVersion(t *testing.T) {
 }
 ```
 
-See the [runnable Docker example](./example/README.md#usage) for all six scenarios and their expected results.
+See the [complete consumer examples](../.agents/skills/document-e2e-scenarios/references/example/README.md) for runnable greeting and expected-failure tests.
 
 ## API
 
@@ -52,7 +65,7 @@ Every invocation resolves the caller-built image locally without pulling and cre
 Setup failures fail the calling test only after cleanup has been registered for acquired or partially created resources.
 Cleanup never removes the caller-owned image.
 
-For a complete standard `t.Run` example, see the [Go scenario sample](../.agents/skills/document-e2e-scenarios/references/example/multiple_scenarios_test.go), which creates the environment inside each subtest callback.
+For complete examples using ordinary Go `Test` functions, see the [Go scenario sample](../.agents/skills/document-e2e-scenarios/references/example/multiple_scenarios_test.go), which creates the environment inside each test function.
 
 ### Commands and results
 
@@ -151,7 +164,7 @@ The literal target `result.txt` differs from `/workspace/result.txt`.
 ## Execution limits
 
 - The library never calls `t.Run` or `t.Parallel` and imposes no fixed concurrency scheduler.
-- Consumers choose sequential tests or call `t.Parallel()` and configure `go test -parallel`, for example `-parallel=2` in the runnable example.
+- Consumers choose sequential tests or call `t.Parallel()` and configure `go test -parallel`, for example `-parallel=2`.
 - Each invocation receives a one-minute context before image resolution and container setup. Call the helper after `t.Parallel()` so time waiting on Go's runner does not consume this budget.
 - Cancellation closes the command's owned output connection and preserves `context.Canceled` or `context.DeadlineExceeded` for `errors.Is` checks.
 - Closing the connection does not itself stop the process. Return from the test after a deadline error so container cleanup can stop remaining processes.
@@ -159,45 +172,9 @@ The literal target `result.txt` differs from `/workspace/result.txt`.
 - Contexts bound helper operations, not arbitrary Go test code.
 - Initial daemon dialing uses the configured Testcontainers dialer; remote TLS connection establishment follows that dialer's behavior.
 
-## Breaking migration
-
-The Go module moved from the repository root to `go/`.
-Use module path `github.com/totto2727-org/e2e/go` and import path `github.com/totto2727-org/e2e/go/cli` instead of `github.com/totto2727-org/e2e/cli`.
-The previous command and file expectation APIs have been removed, with no deprecation wrappers.
-
-| Removed or changed API                                                | Replacement                                                                                                                                                            |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Exec(args)`                                                          | `Run(cli.Command{Args: args})`.                                                                                                                                        |
-| `RunSeparated(command)`                                               | `Run(command)`, now always returning separate streams.                                                                                                                 |
-| `CommandResult`                                                       | `Result{ExitCode, Stdout, Stderr}`.                                                                                                                                    |
-| `Run`/`Exec` combined `Result.Stdout`                                 | Assert `Stdout` and `Stderr` independently. Former stdout-followed-by-stderr expectations must explicitly assign each stream; no combined output is supplied.          |
-| `CheckStdout(StdoutExpectation{Command, ExitCode, Stdout})`           | `CheckCommand(cli.Command{Args: args}, cli.Result{ExitCode: code, Stdout: stdout, Stderr: stderr})`. Specify stderr explicitly, including an intentional empty string. |
-| `CheckCommand(CommandExpectation{Command, ExitCode, Stdout, Stderr})` | `CheckCommand(command, cli.Result{ExitCode: code, Stdout: stdout, Stderr: stderr})`.                                                                                   |
-| `WriteFile(File{Path, Content})`                                      | `WriteFile(path, content)`.                                                                                                                                            |
-| `CheckFile(FileExpectation{Path, Content})`                           | `CheckFile(path, want)`.                                                                                                                                               |
-
-`StdoutExpectation`, `CommandExpectation`, `File`, and `FileExpectation` no longer exist.
-`ReadFile` and physical path assertions retain their contracts.
-`cli.Run(t, image, cases)` and `cli.Case` have been removed without compatibility adapters.
-Replace each registered case with a standard `Test` function or `t.Run` callback that calls `cli.NewEnvironment(t, image)` inside its body.
-Place any `t.Parallel()` call before environment creation and select the desired concurrency with Go's standard `-parallel` option.
-
 ## Development
 
-See [AGENTS.md](../AGENTS.md) for repository structure and development commands.
-From the repository root, use the cached workspace tasks:
-
-```sh
-pnpm exec vp run @totto2727/e2e-go#check
-pnpm exec vp run @totto2727/e2e-go#build
-pnpm exec vp run @totto2727/e2e-go#test
-pnpm exec vp run @totto2727/e2e-go-example#e2e
-```
-
-The reusable module's native tests run with `go test -race ./...` and do not require Docker.
-The independent example module owns the explicit Docker task and is a separate workspace task node.
-Go 1.25.0 and `.golangci.yml` follow `template/go-simple` unchanged; library builds use `go build ./...` instead of producing a CLI executable.
-For standalone Go work without the JavaScript task runner, `nix develop .#go -c just --justfile go/Justfile ci` runs the same module-local checks, build, and native race tests.
+See [Go maintenance](../AGENTS.md#go) for repository maintenance.
 
 ## License
 

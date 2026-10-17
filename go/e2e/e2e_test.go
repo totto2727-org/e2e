@@ -1,8 +1,11 @@
-package example
+//go:build e2e
+
+package e2e
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,4 +145,47 @@ func TestDeadlineScenario(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 70*time.Second {
 		t.Fatalf("run exceeded its case deadline: elapsed=%s", elapsed)
 	}
+}
+
+func TestIsolationScenario(t *testing.T) {
+	t.Parallel()
+	var firstHostname string
+	if !t.Run("first", func(t *testing.T) {
+		environment := cli.NewEnvironment(t, "e2e-example:local")
+		result, err := environment.Run(cli.Command{Args: []string{"cat", "/etc/hostname"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.ExitCode != 0 || result.Stderr != "" || strings.TrimSpace(result.Stdout) == "" {
+			t.Fatalf("hostname result=%+v want exit 0, nonempty hostname, and empty stderr", result)
+		}
+		firstHostname = result.Stdout
+		if err := environment.CheckMissing("/workspace/isolation-marker.txt"); err != nil {
+			t.Fatal(err)
+		}
+		if err := environment.WriteFile("/workspace/isolation-marker.txt", []byte("first case\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := environment.CheckFile("/workspace/isolation-marker.txt", []byte("first case\n")); err != nil {
+			t.Fatal(err)
+		}
+	}) {
+		return
+	}
+	t.Run("second", func(t *testing.T) {
+		environment := cli.NewEnvironment(t, "e2e-example:local")
+		result, err := environment.Run(cli.Command{Args: []string{"cat", "/etc/hostname"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.ExitCode != 0 || result.Stderr != "" || strings.TrimSpace(result.Stdout) == "" {
+			t.Fatalf("hostname result=%+v want exit 0, nonempty hostname, and empty stderr", result)
+		}
+		if result.Stdout == firstHostname {
+			t.Fatalf("case containers reported the same hostname: %q", result.Stdout)
+		}
+		if err := environment.CheckMissing("/workspace/isolation-marker.txt"); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
