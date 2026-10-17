@@ -1,0 +1,5 @@
+packages: .
+test-show-details: direct
+
+package caseyard
+  ghc-options: -Werror

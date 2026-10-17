@@ -1,0 +1,22 @@
+packages:
+  - go
+  - haskell
+  - typescript
+  - rust
+
+catalog:
+  vite-plus: 1.1.0
+
+# Vite+ requires the bundled Vite and Vitest releases.
+# https://viteplus.dev/guide/migrate and https://viteplus.dev/guide/upgrade-project
+overrides:
+  vite@*: npm:@voidzero-dev/vite-plus-core@1.1.0
+  vitest@*: 5.0.3
+
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
+
+allowBuilds:
+  cpu-features: true
+  protobufjs: true
+  ssh2: true

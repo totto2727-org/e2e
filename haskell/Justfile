@@ -1,0 +1,20 @@
+default:
+    @just --list
+
+# Use the root Nix shell before these recipes.
+check:
+    cabal build -fdocker-e2e lib:caseyard test:native test:docker-e2e
+    # This checkout declares neither a license nor a release maintainer.
+    cabal check --ignore=license-none --ignore=no-maintainer
+
+build:
+    cabal build lib:caseyard
+
+test:
+    cabal test native
+
+# The caller must build e2e-example:local before this explicit task.
+e2e:
+    cabal test -fdocker-e2e docker-e2e
+
+ci: check build test

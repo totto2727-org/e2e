@@ -1,11 +1,18 @@
 {
-  description = "Reusable Go CLI end-to-end test helpers";
+  description = "Cross-language CLI end-to-end test libraries";
 
-  inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1";
+  inputs = {
+    nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1";
+    vite-plus-overlay = {
+      url = "github:ryoppippi/nix-vite-plus";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
   outputs =
     {
       nixpkgs,
+      vite-plus-overlay,
       ...
     }:
     let
@@ -22,16 +29,37 @@
         let
           pkgs = import nixpkgs {
             inherit system;
+            overlays = [ vite-plus-overlay.overlays.default ];
           };
+          common = [
+            pkgs.just
+            pkgs.nixfmt
+          ];
+          goTools = [
+            pkgs.go
+            pkgs.golangci-lint
+          ];
+          typescriptTools = [
+            pkgs.nodejs_24
+            pkgs.pnpm
+            pkgs.vite-plus
+          ];
+          rustTools = [ pkgs.rustup ];
+          haskellTools = [
+            pkgs.ghc
+            pkgs.cabal-install
+            pkgs.zlib
+            pkgs.pkg-config
+          ];
         in
         {
           default = pkgs.mkShell {
-            packages = [
-              pkgs.go
-              pkgs.golangci-lint
-              pkgs.just
-            ];
+            packages = common ++ goTools ++ typescriptTools ++ rustTools ++ haskellTools;
           };
+          go = pkgs.mkShell { packages = common ++ goTools; };
+          typescript = pkgs.mkShell { packages = common ++ typescriptTools; };
+          rust = pkgs.mkShell { packages = common ++ rustTools; };
+          haskell = pkgs.mkShell { packages = common ++ haskellTools; };
         }
       );
     };
