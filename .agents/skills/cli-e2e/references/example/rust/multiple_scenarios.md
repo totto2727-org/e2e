@@ -23,7 +23,7 @@ Verify exact greeting bytes and successful application completion.
 ### Preconditions and fixtures
 
 - The caller has built `example-cli:local` with `echo`, `false`, and a long-running default entrypoint.
-- The native `prints_greeting_scenario` test invokes `with_environment` with a fresh lease and case container.
+- The native `prints_greeting_scenario` test invokes `with_environment` with a fresh container.
 - The consumer crate depends on the published `caseyard` package from crates.io, without a checkout path.
 - Place the source in the consumer's `tests/` directory so Cargo discovers it without a `[[test]]` declaration.
 
@@ -70,7 +70,7 @@ Verify that the expected nonzero application result remains available for exact 
 ### Preconditions and fixtures
 
 - The caller-built `example-cli:local` provides `false` and stays running with its default entrypoint.
-- The independent `returns_expected_failure_scenario` native test invokes `with_environment` and gets its own fresh lease and container.
+- The independent `returns_expected_failure_scenario` native test invokes `with_environment` and gets its own fresh container.
 
 ### Execution flow
 
@@ -91,5 +91,5 @@ Verify that the expected nonzero application result remains available for exact 
 ### Notes
 
 - Exit code `1` is an application result. Docker, transport, framing, and cancellation errors remain errors.
-- The runner owns case and stopped-lease cleanup without deleting the image. This sample does not independently inspect cleanup or identity.
+- Testcontainers manages container cleanup. This sample does not independently inspect cleanup or identity.
 - The documented expectations are not a claim of completed Docker acceptance.
