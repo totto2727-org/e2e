@@ -15,9 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
+      - uses: totto2727-org/monorepo/.github/actions/setup-typescript@main
       - uses: totto2727-org/monorepo/.github/actions/setup-haskell@main
       - name: Verify workspace task graph
         run: |
           eval "$(nix print-dev-env "$GITHUB_WORKSPACE")"
-          vp install --frozen-lockfile
           vp run -r ci
