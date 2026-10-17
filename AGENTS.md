@@ -15,8 +15,18 @@ For installation, public API behavior, and consumer requirements, use the [root 
 | `fixtures/cli/Dockerfile`                                   | Shared Linux application image for acceptance tests.                 |
 | `.agents/skills/document-e2e-scenarios/references/example/` | Equivalent public-API consumer examples and their sibling documents. |
 
-Keep the language-independent public contract in the root README and concrete APIs in language READMEs.
-Put development setup, toolchains, architecture constraints, and repository verification here, not in consumer READMEs.
+## Documentation ownership
+
+| Document                                                                   | Canonical content                                                                                        |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [Root README](./README.md)                                                 | Purpose, language-independent public contract, implementation status, and links to language guides.      |
+| Language READMEs                                                           | Consumer installation, language-specific public APIs, limitations, and links to relevant examples.       |
+| Example sources and sibling Markdown                                       | Concrete usage and the behavior each example actually verifies.                                          |
+| [document-e2e-scenarios](./.agents/skills/document-e2e-scenarios/SKILL.md) | Language-independent scenario design and documentation guidance, with links to examples.                 |
+| This AGENTS.md                                                             | Maintainer setup, toolchains, architecture constraints, task orchestration, and repository verification. |
+
+Link to the canonical document instead of repeating its content in another guide or skill.
+Language-specific implementation guidance belongs in the language README and examples, not a separate implementation skill.
 Do not retain dated verification reports, migration tables, or progress logs in these entry documents.
 
 ## Development setup
@@ -174,7 +184,4 @@ Start from the corresponding workspace template and make only necessary library-
 TypeScript follows the [Vite+ library template](https://github.com/totto2727-org/template-vite-plus-lib/tree/ef2173ab26407fdc45b4b05106b5eed561062dd1), Go the [Go template](https://github.com/totto2727-org/template-go-simple/tree/b12903f8f8bf458b93538237c2ee2016dd54865e), and Rust the [Rust template](https://github.com/totto2727-org/template-rust-simple/tree/08ffe1d2d6a27e8d0b4c25f98e5a89a96d8ec1c1).
 There is no Haskell workspace template; keep its native Cabal/Hspec configuration.
 
-- When changing consumer scenarios, follow [document-e2e-scenarios](./.agents/skills/document-e2e-scenarios/SKILL.md), which links to the source/document examples.
-- When integrating consumer CLI tests, also follow [implement-cli-e2e](./.agents/skills/implement-cli-e2e/SKILL.md).
-- Review each scenario document against its source for names, order, fixtures, invocations, assertions, and unverified behavior.
-- When changing README or AGENTS, follow `share-artifact` and `documentation-principles`. Keep consumer reference and maintainer instructions separate and link to the canonical document instead of duplicating it.
+When changing README or AGENTS, follow `share-artifact` and `documentation-principles`.
