@@ -24,8 +24,8 @@ Verify exact greeting bytes and successful application completion.
 
 - The caller has built `example-cli:local` with `echo`, `false`, and a long-running default entrypoint.
 - The native `prints_greeting_scenario` test invokes `with_environment` with a fresh lease and case container.
-- The consumer crate depends on the local library by path, not a published `cli-e2e` package.
-- See [compile and explicit ignored-test execution](../README.md).
+- The consumer crate depends on the published `cli-e2e` package from crates.io, without a checkout path.
+- Place the source in the consumer's `tests/` directory so Cargo discovers it without a `[[test]]` declaration.
 
 ### Execution flow
 

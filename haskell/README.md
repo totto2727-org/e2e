@@ -6,13 +6,15 @@ The [root contract](../README.md) defines the shared behavior.
 
 ## Setup
 
-Add the checkout's `haskell/` directory to your consumer project's `cabal.project`:
+Use an ordinary consumer `cabal.project`:
 
 ```cabal
-packages: . /path/to/e2e/haskell
+packages: .
 ```
 
-Add `cli-e2e` and `hspec >=2.10 && <2.12` to your test suite's `build-depends`.
+After the package is published to Hackage, add `cli-e2e >=0.1.0.0 && <0.2` and `hspec >=2.10 && <2.12` to your test suite's `build-depends`.
+Cabal resolves the library from Hackage, not a neighboring checkout.
+These instructions describe the published-package setup and do not assert that this version is already available.
 The library requires `base >=4.18 && <5` and a running Linux-container Docker Engine.
 
 ## Use the library

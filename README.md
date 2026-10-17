@@ -16,9 +16,6 @@ Names and value types follow each language's conventions.
 | TypeScript | [Usage](./typescript/README.md#usage) and [API](./typescript/README.md#values-and-operations)     | Vitest         | Implemented                 | Implemented    |
 | Rust       | [Usage and API](./rust/README.md#public-api)                                                      | Tokio tests    | Implemented                 | Implemented    |
 
-For complete tests of the same greeting and expected-failure behaviors, see the [equivalent examples](./.agents/skills/document-e2e-scenarios/references/example/README.md).
-These examples use ordinary `test`, `it`, or native test functions, not a library-specific runner.
-
 ## Prerequisites and setup
 
 - Access to a Linux-container Docker Engine.

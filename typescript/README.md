@@ -1,30 +1,24 @@
 # TypeScript CLI E2E
 
 `@totto2727/e2e-cli` is a standalone Node.js library implementing the [shared contract](../README.md) with a native Docker Engine HTTP adapter and a framework-independent scoped lifecycle.
-The package is private and is consumed from a local checkout.
+The package is not yet published.
 
 ## Setup
 
 Use Node.js 24 or newer, pnpm 11.21.0, and a running Linux-container Docker Engine.
-Add the local package to your consumer's `package.json`:
+After publication, add the package to your consumer's `package.json`:
 
 ```json
 {
   "devDependencies": {
-    "@totto2727/e2e-cli": "file:/path/to/e2e/typescript"
+    "@totto2727/e2e-cli": "^0.0.0"
   }
 }
 ```
 
-The public entrypoint requires generated `dist/index.mjs` and `dist/index.d.mts` files.
-Build them from the e2e repository root before installing the local dependency in your consumer:
-
-```sh
-pnpm install --frozen-lockfile
-pnpm exec vp run @totto2727/e2e-cli#build
-```
-
-Install your consumer's dependencies with its package manager.
+Install your consumer's dependencies with its package manager after the matching version is available on npm.
+The version range matches the current package metadata, not an already published release.
+The published package supplies its JavaScript and declarations, so consumers do not build this repository.
 The usage example also requires Vitest in the consumer's test dependencies.
 
 ## Usage

@@ -24,7 +24,6 @@ Verify that the local CLI image prints the exact caller-visible greeting success
 
 - The caller has built `example-cli:local` with `echo`, `false`, and a default entrypoint that keeps the container running.
 - The Hspec `it "prints greeting"` body calls `withEnvironment`, creating a fresh container and a private stopped image lease only when that example executes.
-- See [local build and explicit Docker commands](../README.md).
 
 ### Execution flow
 

@@ -9,13 +9,16 @@ Use Rust 1.88 or newer and a running Linux-container Docker Engine.
 Build your application image locally before running tests.
 Its default entrypoint must keep the container running while commands execute.
 
-Add the local crate and Tokio to your consumer's `Cargo.toml`:
+After publication to crates.io, add the crate and Tokio to your consumer's `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-cli-e2e = { path = "/path/to/e2e/rust" }
+cli-e2e = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
+
+Cargo resolves the crate from crates.io without a checkout path.
+The current crate is unpublished, so this setup cannot be used until the matching package is released.
 
 ## Public API
 

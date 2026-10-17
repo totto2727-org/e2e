@@ -27,7 +27,7 @@ The documentation structure is language-independent. Automated discovery and cov
 ## Authoring workflow
 
 1. Read the complete scenario source, shared helpers, fixture builders, and current public library API.
-2. Read the complete source/document pair for the language in [the example index](references/example/README.md). The Go pair remains intact and the other pairs exercise the same two observable cases through their own public APIs.
+2. Read the source/document pair for the language: [Go](references/example/multiple_scenarios_test.md), [Haskell](references/example/haskell/MultipleScenariosSpec.md), [TypeScript](references/example/typescript/multiple_scenarios.test.md), or [Rust](references/example/rust/multiple_scenarios.md). Each document links to its exact source. Keep examples as source and sibling documentation only, without standalone manifests, lockfiles, runner entrypoints, tool configuration, or an extra index.
 3. Copy [the scenario template](assets/scenario-test.template.md) beside the source, name it according to the naming contract, and replace its placeholders.
 4. Duplicate the complete scenario block beginning with the `##` heading once per executable test case. Define tests with the language's standard framework and call the environment helper inside their bodies. Do not introduce a library-specific case registry or document a suite wrapper as another scenario.
 5. Remove unused optional rows instead of leaving empty prose. Keep each scenario's commands, arguments, fixtures, execution flow, results, and notes inside that scenario's section.
@@ -35,7 +35,7 @@ The documentation structure is language-independent. Automated discovery and cov
 7. Separate expected results into exit status, stdout, stderr, persisted state, filesystem/link state, and non-mutation guarantees where relevant. Distinguish asserted guarantees from behavior not independently tested.
 8. Link the document back to its exact sibling source with `[source filename](./source filename)`.
 9. For Go, run `python3 scripts/validate_scenario_docs.py /absolute/path/to/scenario/package` from the skill directory. For Haskell, TypeScript, and Rust, manually check source links, registered test cases, section order, placeholders, and assertions against the source. The Go validator does not validate those languages, even if it exits successfully when pointed at a mixed directory.
-10. Compile the exact consumer source against the current local library's public API, then execute its explicit Docker test entrypoint when Docker validation is authorized. See the example index for separate compile and Docker commands.
+10. When execution is needed, integrate the exact source into an existing consumer test project. Use its normal package dependencies and framework commands. Do not create permanent sample infrastructure or add documentation examples to CI. Report unavailable package releases as a verification prerequisite, not as a reason to add checkout-relative dependencies.
 11. Read the finished document against the source once more. Neither a structural check nor compilation proves semantic truth or successful Docker acceptance. Report which checks actually ran.
 
 ## Required sections

@@ -12,16 +12,14 @@ See the [shared language-independent contract](../README.md) for the common beha
 
 ## Setup
 
-Use the checkout as a local dependency in your consumer's `go.mod`:
+Add the module to your consumer project:
 
-```go.mod
-require github.com/totto2727-org/e2e/go v0.0.0
-
-replace github.com/totto2727-org/e2e/go => /path/to/e2e/go
+```sh
+go get github.com/totto2727-org/e2e/go@v0.0.0-20261017065452-5b5def6e7ca1
 ```
 
-Replace `/path/to/e2e/go` with the checkout's Go module directory.
-The local `replace` resolves the dependency without a published release.
+This pins the API shown below through Go's normal module resolver, without a local `replace` directive.
+The pseudo-version identifies a source revision, not a tagged release.
 
 ## Usage
 
@@ -50,8 +48,6 @@ func TestVersion(t *testing.T) {
 	}
 }
 ```
-
-See the [complete consumer examples](../.agents/skills/document-e2e-scenarios/references/example/README.md) for runnable greeting and expected-failure tests.
 
 ## API
 

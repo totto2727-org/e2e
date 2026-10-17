@@ -24,8 +24,7 @@ Verify successful execution with an exact greeting, including its final newline.
 
 - The caller has built `example-cli:local` with `echo`, `false`, and a long-running default entrypoint.
 - An ordinary Vitest `test.concurrent('prints greeting', ...)` calls public `withEnvironment` from `@totto2727/e2e-cli` inside its callback, forwarding `context.signal` and receiving its own fresh container.
-- The local `file:` dependency resolves public imports to the checkout's built package exports, without aliases or a registry library.
-- See the [manual setup instructions](../README.md).
+- The published `@totto2727/e2e-cli` dependency supplies its public JavaScript and declaration exports through npm, without checkout paths or aliases.
 
 ### Execution flow
 
@@ -46,8 +45,8 @@ Verify successful execution with an exact greeting, including its final newline.
 
 - Expected strings are assertion values, never replacements for Docker execution.
 - Vitest controls concurrent scheduling, so source order is not a timing dependency.
-- The sample sets `testTimeout: 125_000` to allow the 60-second lifecycle budget and two independent 30-second cleanup budgets.
-- Run `pnpm exec vitest run` manually from this directory after setup.
+- Set the consumer's Docker test timeout to allow setup and cleanup. A 125-second timeout covers the helper's 60-second operation budget and two independent 30-second cleanup budgets.
+- Run the consumer project's Docker Vitest suite after integrating this source.
 - This sample has no Vitest project selection or root task registration.
 
 ## `returns expected failure`

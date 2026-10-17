@@ -37,8 +37,11 @@ vp run ci
 ```
 
 The root pnpm workspace and `pnpm-lock.yaml` cover the libraries and repository tools only.
-Keep documentation examples out of workspace membership, root dependencies, and task graphs.
-Run examples manually from their own directories when changing them, using the [example instructions](./.agents/skills/document-e2e-scenarios/references/example/README.md).
+Keep documentation examples limited to test source files and their sibling scenario documents.
+Do not add package manifests, lockfiles, runner entrypoints, standalone tool configuration, or root task dependencies for them.
+Show normal published-package setup in the language READMEs, not checkout-relative dependency overrides.
+When manual execution is useful, integrate the source into an existing consumer test project.
+Registry consumption remains unverified until the required packages are published.
 Keep `minimumReleaseAge: 1440` and `minimumReleaseAgeStrict: true` without bypasses.
 Keep the Vite+ catalog, Vite alias, and bundled Vitest override aligned with the template.
 Keep `allowBuilds.vite-plus: false`: the installed tools are prebuilt and need no dependency lifecycle permission.
@@ -72,9 +75,9 @@ Go library builds do not need an artificial archive or executable output.
 Derive Vite+ formatter and linter exclusions from `.gitignore` through `@totto2727/gitignore-patterns`.
 Keep shared formatter and linter blocks in the root configuration.
 Add individual exclusions only for a demonstrated helper limitation or cache-input gap.
-The manual TypeScript example has its own dependency installation outside the root workspace.
-Its tracked source cannot be excluded through Gitignore, so root type-aware lint excludes that consumer only.
-Root formatting still covers it, and its own TypeScript command checks it after local installation.
+The TypeScript documentation example is a source snippet for a consumer project, not a root workspace member.
+Its tracked source cannot be excluded through Gitignore, so root type-aware lint excludes that snippet because its consumer dependencies are not installed here.
+Root formatting still covers it; type checking belongs to the consumer project when the snippet is integrated.
 Explicit Vite+ cache globs do not automatically exclude Gitignored files; keep generated outputs out of source inputs.
 Keep TypeScript's automatic build input tracking and `dist/**` output declaration.
 Consumers of built exports must depend on the library build and track those exports as inputs.
@@ -171,7 +174,7 @@ Start from the corresponding workspace template and make only necessary library-
 TypeScript follows the [Vite+ library template](https://github.com/totto2727-org/template-vite-plus-lib/tree/ef2173ab26407fdc45b4b05106b5eed561062dd1), Go the [Go template](https://github.com/totto2727-org/template-go-simple/tree/b12903f8f8bf458b93538237c2ee2016dd54865e), and Rust the [Rust template](https://github.com/totto2727-org/template-rust-simple/tree/08ffe1d2d6a27e8d0b4c25f98e5a89a96d8ec1c1).
 There is no Haskell workspace template; keep its native Cabal/Hspec configuration.
 
-- When changing consumer scenarios, follow [document-e2e-scenarios](./.agents/skills/document-e2e-scenarios/SKILL.md) and its [exact examples](./.agents/skills/document-e2e-scenarios/references/example/README.md).
+- When changing consumer scenarios, follow [document-e2e-scenarios](./.agents/skills/document-e2e-scenarios/SKILL.md), which links to the source/document examples.
 - When implementing Go CLI scenarios, also follow [implement-cli-e2e](./.agents/skills/implement-cli-e2e/SKILL.md).
 - Validate Go sibling documents with `python3 .agents/skills/document-e2e-scenarios/scripts/validate_scenario_docs.py go/e2e` and the corresponding example directory.
 - When changing README or AGENTS, follow `share-artifact` and `documentation-principles`. Keep consumer reference and maintainer instructions separate and link to the canonical document instead of duplicating it.
