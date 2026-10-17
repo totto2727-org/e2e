@@ -183,7 +183,7 @@ Keep Docker tests ignored by default.
 
 ## Publishing
 
-The [publish workflow](./.github/workflows/publish.yml) starts manually through `workflow_dispatch`.
+The [publish workflow](./.github/workflows/publish.yml) runs on pushes to `main`.
 It builds the npm package and calls the shared npm and crates.io publish actions.
 Run CI separately before publishing.
 
