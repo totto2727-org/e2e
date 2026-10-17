@@ -25,51 +25,25 @@ export default defineConfig({
   },
   run: {
     tasks: {
-      'check:vp': { command: 'vp check', dependsOn: ['@totto2727/caseyard#build'], cache: { output: [] } },
-      'check:nixfmt': { command: 'nixfmt --check flake.nix', cache: { output: [] } },
-      'fix:vp': { command: 'vp check --fix', dependsOn: ['@totto2727/caseyard#fix'], cache: false },
-      'fix:nixfmt': { command: 'nixfmt flake.nix', cache: false },
+      'check:vp': { command: 'vp check', dependsOn: ['@totto2727/caseyard#build'], cache: true },
+      'check:nixfmt': { command: 'nixfmt --check flake.nix', cache: true },
+      'fix:vp': { command: 'vp check --fix', dependsOn: ['@totto2727/caseyard#fix'], cache: true },
+      'fix:nixfmt': { command: 'nixfmt flake.nix', cache: true },
       check: {
         command: '',
-        dependsOn: [
-          'check:vp',
-          'check:nixfmt',
-          '@totto2727/caseyard-go#check',
-          '@totto2727/caseyard-haskell#check',
-          '@totto2727/caseyard#check',
-          '@totto2727/caseyard-rust#check',
-        ],
+        dependsOn: ['check:vp', 'check:nixfmt'],
       },
       fix: {
         command: '',
-        dependsOn: ['fix:vp', 'fix:nixfmt', '@totto2727/caseyard-go#fix', '@totto2727/caseyard-rust#fix'],
-        cache: false,
-      },
-      build: {
-        command: '',
-        dependsOn: [
-          '@totto2727/caseyard-go#build',
-          '@totto2727/caseyard-haskell#build',
-          '@totto2727/caseyard#build',
-          '@totto2727/caseyard-rust#build',
-        ],
-      },
-      test: {
-        command: '',
-        dependsOn: [
-          '@totto2727/caseyard-go#test',
-          '@totto2727/caseyard-haskell#test',
-          '@totto2727/caseyard#test',
-          '@totto2727/caseyard-rust#test',
-        ],
+        dependsOn: ['fix:vp', 'fix:nixfmt'],
       },
       pree2e: {
         command: 'docker build --tag e2e-example:local fixtures/cli',
         cache: false,
       },
-      ci: { command: '', dependsOn: ['check', 'build', 'test', '@totto2727/caseyard#postbuild'] },
+      ci: { command: '', dependsOn: ['check'] },
       e2e: {
-        command: "vp run --filter '!@totto2727/caseyard-workspace' --concurrency-limit 1 e2e",
+        command: 'vp run -r --concurrency-limit 1 e2e',
         dependsOn: ['pree2e'],
         cache: false,
       },

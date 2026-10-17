@@ -1,8 +1,7 @@
 name: Publish
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,24 +17,11 @@ jobs:
           persist-credentials: false
       - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
       - uses: totto2727-org/monorepo/.github/actions/setup-typescript@main
-      - name: Verify release versions
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
+      - name: Build npm package
+        working-directory: typescript
         run: |
           eval "$(nix print-dev-env "$GITHUB_WORKSPACE#default")"
-          npm_version="$(node -p 'JSON.parse(require("fs").readFileSync("typescript/package.json", "utf8")).version')"
-          crate_version="$(cargo metadata --manifest-path rust/Cargo.toml --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "caseyard") | .version')"
-          test "$RELEASE_TAG" = "v$npm_version"
-          test "$RELEASE_TAG" = "v$crate_version"
-      - name: Check npm and Rust packages
-        run: |
-          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#default")"
-          vp run --filter @totto2727/caseyard --filter @totto2727/caseyard-rust --no-cache ci
-      - name: Verify crate archive
-        working-directory: rust
-        run: |
-          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#default")"
-          cargo publish --dry-run --locked
+          vp run build
       - uses: totto2727-org/monorepo/.github/actions/publish-npm@main
         with:
           working-directory: typescript

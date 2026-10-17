@@ -43,7 +43,7 @@ Docker must be available for explicit E2E execution.
 ```sh
 nix develop
 vp install --frozen-lockfile
-vp run ci
+vp run -r ci
 ```
 
 The root pnpm workspace and `pnpm-lock.yaml` cover the libraries and repository tools only.
@@ -61,15 +61,17 @@ Review any newly required lifecycle script before granting package-specific perm
 
 | Task            | Purpose                                                                                   |
 | --------------- | ----------------------------------------------------------------------------------------- |
-| `fix`           | Formatter and linter autofixes. Never cache mutations.                                    |
+| `fix`           | Formatter and linter autofixes. Cache enabled by default.                                 |
 | `check`         | Formatting, linting, and type checks. Compile Docker test sources without executing them. |
 | `build`         | Produce the application or library artifacts.                                             |
 | `test`          | Lightweight reproducible tests, including controlled transport fixtures. No Docker.       |
 | `pre*`, `post*` | Required preparation or follow-up stages, wired with explicit dependencies.               |
-| `ci`            | Checks, builds, package validation, and native tests without Docker.                      |
+| `ci`            | Checks, builds, and native tests without Docker.                                          |
 | `e2e`           | Explicit, uncached Docker acceptance for the four implementations.                        |
 
 Use Vite+ for cross-project orchestration and caching.
+Use `vp run -r <task>` to select workspace packages instead of listing their names in an aggregate.
+Keep caching enabled for `fix`, `check`, `build`, and `test`.
 Put a lightweight command directly in its base task.
 Add `<category>:<CLI>` tasks and an aggregate only for multiple tools or independently useful stages.
 Use `dependsOn` for multi-stage work and local Justfiles for complex options or multi-line procedures.
@@ -78,7 +80,8 @@ Do not introduce Node solely for those standalone workflows.
 
 Use Vite+'s automatic input tracking by leaving `cache.input` unset.
 Do not enumerate source or configuration paths unless a demonstrated input-tracking gap requires an exception.
-Declare outputs that the cache must restore.
+Use automatic output tracking unless a demonstrated gap requires explicit outputs.
+Cargo and Cabal read and update `target/` and `dist-newstyle/`; exclude those directories from inputs and restore them as outputs.
 Disable caching for image creation and Docker execution because daemon state is not a source-file output.
 Use each tool's standard output directories and keep generated files out of commits.
 Haskell uses `dist-newstyle/`; Rust uses `target/`; TypeScript emits `dist/`.
@@ -98,11 +101,11 @@ A clean `check` or `fix` must not assume pre-existing declarations.
 From the root Nix shell:
 
 ```sh
-vp run --no-cache ci
+vp run -r ci
 vp run e2e
 ```
 
-`ci` checks and builds all implementations and runs native tests.
+`vp run -r ci` checks and builds all implementations and runs native tests.
 It does not execute Docker tests or build documentation examples.
 `e2e` builds `fixtures/cli` with the `e2e-example:local` tag, then runs the four language suites sequentially.
 Use `vp run @totto2727/caseyard-go#ci` or the corresponding Haskell, TypeScript, or Rust package name to select one graph.
@@ -180,18 +183,18 @@ Keep Docker tests ignored by default.
 
 ## Publishing
 
-The [publish workflow](./.github/workflows/publish.yml) runs for `v*` tags.
-The tag must match both `typescript/package.json` and `rust/Cargo.toml`, for example `v0.1.0`.
-It checks both packages and verifies the crate archive before calling the shared npm and crates.io publish actions.
+The [publish workflow](./.github/workflows/publish.yml) starts manually through `workflow_dispatch`.
+It builds the npm package and calls the shared npm and crates.io publish actions.
+Run CI separately before publishing.
 
 | Registry  | Package               | Required configuration                                                                 |
 | --------- | --------------------- | -------------------------------------------------------------------------------------- |
 | npm       | `@totto2727/caseyard` | Package ownership and trusted publishing for this repository's `publish.yml` workflow. |
 | crates.io | `caseyard`            | Crate ownership and the `CARGO_REGISTRY_TOKEN` repository secret.                      |
 
-Confirm registry name availability and complete any first-publication setup before pushing a release tag.
+Confirm registry name availability and complete any first-publication setup before starting the workflow.
 No license has been selected for this repository; resolve the distribution terms before the first publication.
-Do not create or push release tags during dry-run validation.
+Do not run the publish workflow during validation.
 The private workspace packages are orchestration wrappers, not publication targets.
 
 ## Template basis and task-specific guides

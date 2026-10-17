@@ -20,22 +20,19 @@ export default defineConfig({
     tasks: {
       build: {
         command: 'vp pack',
-        cache: {
-          output: ['dist/**'],
-        },
+        cache: true,
       },
-      check: { command: 'vp check', dependsOn: ['build'], cache: { output: [] } },
-      ci: { command: '', dependsOn: ['check', 'test', 'postbuild'] },
+      check: { command: 'vp check', dependsOn: ['build'], cache: true },
+      ci: { command: '', dependsOn: ['check', 'test'] },
       e2e: { command: 'vp test run --project docker', cache: false },
       // Generate the shared public declarations before fixers start writing sources.
-      fix: { command: 'vp check --fix', dependsOn: ['build'], cache: false },
-      postbuild: { command: 'vp pm pack -- --dry-run', dependsOn: ['build'], cache: { output: [] } },
+      fix: { command: 'vp check --fix', dependsOn: ['build'], cache: true },
       test: { command: '', dependsOn: ['test:vitest', 'test:vitest-package'] },
-      'test:vitest': { command: 'vp test run --project native', cache: { output: [] } },
+      'test:vitest': { command: 'vp test run --project native', cache: true },
       'test:vitest-package': {
         command: 'vp test run --project package',
         dependsOn: ['build'],
-        cache: { output: [] },
+        cache: true,
       },
     },
   },
