@@ -2,6 +2,7 @@
 
 Small libraries for CLI end-to-end tests in disposable Linux containers.
 Use your language's standard test framework to define cases and call a scoped environment helper inside each test.
+The libraries supplement, rather than replace, each language and framework's best practices for test structure and naming.
 Each case receives a fresh container, command execution, and file assertions.
 
 ## Choose an implementation

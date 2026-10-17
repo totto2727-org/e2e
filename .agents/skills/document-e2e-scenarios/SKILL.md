@@ -9,6 +9,8 @@ metadata:
 # Document E2E scenarios
 
 Keep scenario intent beside the executable tests so reviewers can understand the workflow without reconstructing it from helper calls.
+The library supplements each language and test framework rather than replacing their best practices, standard test structure, or naming conventions.
+Adapt the Markdown scenario titles to those conventions when implementing tests.
 This skill explains how to describe observable behavior, not language syntax or test-framework configuration.
 
 ## Scenario design

@@ -2,7 +2,7 @@
 
 Source: [{{SOURCE_FILE}}](./{{SOURCE_FILE}})
 
-## `{{SCENARIO_FUNCTION}}`
+## `{{SCENARIO_TITLE}}`
 
 ### Scope
 
