@@ -22,8 +22,8 @@ Explain the single user-visible behavior covered by this scenario.
 
 ### Preconditions and fixtures
 
-- Describe the isolated HOME and working directory.
-- Describe configuration, domain fixtures, persisted state, and foreign paths created before the first command.
+- Describe the initial environment and working directory required by the scenario.
+- Describe any configuration, fixtures, persisted state, and foreign paths required before the first command.
 
 ### Execution flow
 

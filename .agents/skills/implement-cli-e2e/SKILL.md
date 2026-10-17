@@ -17,11 +17,9 @@ Read and apply `$document-e2e-scenarios` before changing a scenario. Scenario do
 1. Create or update the sibling `<stem>_test.md` from the documentation skill's `assets/scenario-test.template.md`.
 2. Use the documentation skill's complete [Go example](../document-e2e-scenarios/references/example/multiple_scenarios_test.go) and [sibling Markdown example](../document-e2e-scenarios/references/example/multiple_scenarios_test.md) as the concrete file-pair reference.
 3. Keep commands, options, fixture setup, execution order, output, and state expectations synchronized with the Go source.
-4. Run the documentation skill's `scripts/validate_scenario_docs.py` against the scenario package.
-5. Treat a missing, stale, or validator-failing document as a blocking implementation failure.
+4. Review the document against the source for complete scenario coverage, invocation order, and asserted results.
+5. Treat a missing, stale, or inaccurate document as a blocking implementation failure.
 6. Commit the Go scenario and its document together.
-
-Do not report the scenario complete until the documentation validator passes.
 
 ## Workflow
 
@@ -70,7 +68,7 @@ Run the repository's configured formatter/linter, build, and race-enabled test t
 - all CLI behavior and state assertions pass;
 - scenario containers are cleaned;
 - the caller-owned image remains available;
-- the scenario-document validator passes.
+- the sibling document accurately describes the executed scenarios and assertions.
 
 ## Failure handling
 

@@ -176,5 +176,5 @@ There is no Haskell workspace template; keep its native Cabal/Hspec configuratio
 
 - When changing consumer scenarios, follow [document-e2e-scenarios](./.agents/skills/document-e2e-scenarios/SKILL.md), which links to the source/document examples.
 - When implementing Go CLI scenarios, also follow [implement-cli-e2e](./.agents/skills/implement-cli-e2e/SKILL.md).
-- Validate Go sibling documents with `python3 .agents/skills/document-e2e-scenarios/scripts/validate_scenario_docs.py go/e2e` and the corresponding example directory.
+- Review each scenario document against its source for names, order, fixtures, invocations, assertions, and unverified behavior.
 - When changing README or AGENTS, follow `share-artifact` and `documentation-principles`. Keep consumer reference and maintainer instructions separate and link to the canonical document instead of duplicating it.

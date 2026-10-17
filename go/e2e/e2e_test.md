@@ -112,10 +112,10 @@ Check that an expected nonzero command result does not fail the scenario.
 
 ### Arguments and options
 
-| Argument or option | Purpose                        |
-| ------------------ | ------------------------------ |
-| `-c`               | Execute the fixture script.    |
-| `7`                | Select the expected exit code. |
+| Argument or option              | Purpose                                                                    |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| `-c`                            | Execute the fixture script.                                                |
+| `echo expected-failure; exit 7` | Pass the script as one argument, selecting exit code `7` inside the shell. |
 
 ### Preconditions and fixtures
 

@@ -32,13 +32,13 @@ Verify that the CLI image can print a caller-visible greeting successfully.
 
 ### Expected results
 
-| Observation     | Expected result                  |
-| --------------- | -------------------------------- |
-| Exit status     | `0`                              |
-| Standard output | Exactly `hello from e2e\n`       |
-| Standard error  | Exactly empty                    |
-| Persisted state | No state is persisted.           |
-| Filesystem      | No files are created or changed. |
+| Observation     | Expected result             |
+| --------------- | --------------------------- |
+| Exit status     | `0`                         |
+| Standard output | Exactly `hello from e2e\n`  |
+| Standard error  | Exactly empty               |
+| Persisted state | Not independently asserted. |
+| Filesystem      | Not independently asserted. |
 
 ### Notes
 
@@ -74,13 +74,13 @@ Verify that an expected nonzero CLI result remains observable without failing th
 
 ### Expected results
 
-| Observation     | Expected result                  |
-| --------------- | -------------------------------- |
-| Exit status     | `1`                              |
-| Standard output | Empty                            |
-| Standard error  | Exactly empty                    |
-| Persisted state | No state is persisted.           |
-| Filesystem      | No files are created or changed. |
+| Observation     | Expected result             |
+| --------------- | --------------------------- |
+| Exit status     | `1`                         |
+| Standard output | Empty                       |
+| Standard error  | Exactly empty               |
+| Persisted state | Not independently asserted. |
+| Filesystem      | Not independently asserted. |
 
 ### Notes
 

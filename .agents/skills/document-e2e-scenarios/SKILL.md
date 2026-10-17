@@ -1,6 +1,6 @@
 ---
 name: document-e2e-scenarios
-description: Create English sibling Markdown documents for CLI E2E scenarios, explaining intent, commands, fixtures, ordered execution, observable results, and limitations. Use when adding, changing, reviewing, or backfilling consumer scenario documentation. The bundled structural validator supports Go only. Do not use for API references, unit-test comments, or general QA plans.
+description: Create English sibling Markdown documents for CLI E2E scenarios, explaining intent, commands, fixtures, ordered execution, observable results, and limitations. Use when adding, changing, reviewing, or backfilling consumer scenario documentation. Do not use for API references, unit-test comments, or general QA plans.
 metadata:
   author: totto2727
   version: 1.1.0
@@ -48,7 +48,7 @@ Use them to understand the correspondence between scenario intent, executable op
 5. Separate command names from their arguments and options. Put each complete invocation and its literal argument order under `Execution flow`.
 6. Separate expected exit status, stdout, stderr, persisted state, filesystem state, and non-mutation guarantees where relevant.
 7. Check names, source links, scenario order, placeholders, and expected results against the source. Inspect helpers or fixtures when an expectation is unclear instead of guessing.
-8. Validate the document structure where tooling supports it. Report structural checks separately from compilation and actual E2E execution.
+8. Review the finished document against the source. Report documentation review separately from compilation and actual E2E execution.
 
 ## Required sections
 
@@ -68,13 +68,9 @@ Use tables for compact command, argument, and result mappings, and numbered list
 
 ## Validation and evidence
 
-The bundled structural validator supports Go sources only.
-From the skill directory, run `python3 scripts/validate_scenario_docs.py /absolute/path/to/scenario/package` for a supported source/document pair.
-It checks discovered scenarios, sibling filenames, source links, section coverage and order, placeholders, and file safety.
-Its discovery rules do not define how other languages or test frameworks must be written.
-For other source types, review the same document properties against the source without claiming automated coverage.
-
-A structural check does not establish semantic accuracy or successful Docker execution.
+Review each document against its source for complete scenario coverage, correct order, exact invocations, and asserted results.
+Confirm that the source link resolves and no template placeholders remain.
+Document review does not establish successful Docker execution.
 When execution is needed, integrate the example source into an existing consumer test project and use its normal dependencies and verification commands.
 Report unavailable package releases as a verification prerequisite rather than adding checkout-relative dependency overrides.
 Keep examples limited to source/document pairs, without permanent execution scaffolding or extra CI dependencies.
