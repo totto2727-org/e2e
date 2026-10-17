@@ -175,6 +175,6 @@ TypeScript follows the [Vite+ library template](https://github.com/totto2727-org
 There is no Haskell workspace template; keep its native Cabal/Hspec configuration.
 
 - When changing consumer scenarios, follow [document-e2e-scenarios](./.agents/skills/document-e2e-scenarios/SKILL.md), which links to the source/document examples.
-- When implementing Go CLI scenarios, also follow [implement-cli-e2e](./.agents/skills/implement-cli-e2e/SKILL.md).
+- When integrating consumer CLI tests, also follow [implement-cli-e2e](./.agents/skills/implement-cli-e2e/SKILL.md).
 - Review each scenario document against its source for names, order, fixtures, invocations, assertions, and unverified behavior.
 - When changing README or AGENTS, follow `share-artifact` and `documentation-principles`. Keep consumer reference and maintainer instructions separate and link to the canonical document instead of duplicating it.
