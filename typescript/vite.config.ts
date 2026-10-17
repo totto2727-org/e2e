@@ -24,7 +24,7 @@ export default defineConfig({
           output: ['dist/**'],
         },
       },
-      check: { command: 'vp check', cache: { output: [] } },
+      check: { command: 'vp check', dependsOn: ['build'], cache: { output: [] } },
       ci: { command: '', dependsOn: ['check', 'test', 'postbuild'] },
       e2e: { command: 'vp test run --project docker', cache: false },
       // Generate the shared public declarations before fixers start writing sources.

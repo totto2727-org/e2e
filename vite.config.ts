@@ -19,13 +19,13 @@ export default defineConfig({
     options: { typeAware: true, typeCheck: true },
     ignorePatterns: [
       ...ignorePatterns,
-      // This standalone consumer installs its own dependencies, outside the root workspace.
+      // This documentation snippet uses dependencies supplied by the consumer's project.
       '.agents/skills/document-e2e-scenarios/references/example/typescript/**',
     ],
   },
   run: {
     tasks: {
-      'check:vp': { command: 'vp check', cache: { output: [] } },
+      'check:vp': { command: 'vp check', dependsOn: ['@totto2727/e2e-cli#build'], cache: { output: [] } },
       'check:nixfmt': { command: 'nixfmt --check flake.nix', cache: { output: [] } },
       'fix:vp': { command: 'vp check --fix', dependsOn: ['@totto2727/e2e-cli#fix'], cache: false },
       'fix:nixfmt': { command: 'nixfmt flake.nix', cache: false },
