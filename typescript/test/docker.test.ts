@@ -1,37 +1,32 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
-import { Engine, json, stringField } from '../src/engine.js'
 import { DeadlineError, withEnvironment, type Environment } from '../src/index.js'
 
 const image = 'e2e-example:local'
-const engine = new Engine()
+const execute = promisify(execFile)
+async function docker(...args: string[]): Promise<string> {
+  return (await execute('docker', args, { timeout: 30_000 })).stdout.trim()
+}
 const identities: string[] = []
 let imageID = ''
 let baseline: string[] = []
 
 async function containers(): Promise<string[]> {
-  const filters = encodeURIComponent(JSON.stringify({ label: ['org.totto2727.e2e.owner'] }))
-  const value = await json(engine, 'GET', `/containers/json?all=true&filters=${filters}`, AbortSignal.timeout(30_000))
-  if (!Array.isArray(value)) throw new Error('Expected Docker container list')
-  return value.map((container: unknown) => stringField(container, 'Id')).sort()
+  const output = await docker('ps', '-aq', '--no-trunc', '--filter', 'label=org.totto2727.e2e.owner')
+  return output ? output.split('\n').sort() : []
 }
 beforeAll(async () => {
   baseline = await containers()
-  imageID = stringField(
-    await json(engine, 'GET', `/images/${encodeURIComponent(image)}/json`, AbortSignal.timeout(30_000)),
-    'Id',
-  )
+  imageID = await docker('image', 'inspect', '--format', '{{.Id}}', image)
 }, 30_000)
 afterAll(async () => {
   expect(identities.length).toBeGreaterThan(0)
   expect(new Set(identities).size).toBe(identities.length)
   expect(await containers()).toEqual(baseline)
-  expect(
-    stringField(
-      await json(engine, 'GET', `/images/${encodeURIComponent(image)}/json`, AbortSignal.timeout(30_000)),
-      'Id',
-    ),
-  ).toBe(imageID)
+  expect(await docker('image', 'inspect', '--format', '{{.Id}}', image)).toBe(imageID)
 }, 30_000)
 
 async function checkIdentity(env: Environment): Promise<void> {
@@ -41,8 +36,7 @@ async function checkIdentity(env: Environment): Promise<void> {
   const id = hostname.stdout.trim()
   expect(id).toMatch(/^[a-f0-9]{12}$/)
   identities.push(id)
-  const inspected = await json(engine, 'GET', `/containers/${id}/json`, env.signal)
-  expect(inspected).toMatchObject({ Image: imageID })
+  expect(await docker('inspect', '--format', '{{.Image}}', id)).toBe(imageID)
 }
 
 const empty = { exitCode: 0, stdout: '', stderr: '' }

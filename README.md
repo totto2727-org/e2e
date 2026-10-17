@@ -35,8 +35,9 @@ No package publication or release is implied by the implementation table.
 
 Exercise the real executable through argv commands and observable output or filesystem state.
 Keep multi-command application workflows inside the test.
-The libraries do not build, pull, or remove the caller's application image, mount the host workspace, or manage application-specific state.
-An implementation may use backend infrastructure images, such as Testcontainers' resource reaper; its language README documents this behavior.
+The libraries do not build or remove the caller's application image, mount the host workspace, or manage application-specific state.
+Build the application image before testing.
+Image pull policies and backend infrastructure images, such as Testcontainers' resource reaper, are documented in each language README.
 Commands are argv entries, not shell strings.
 Shell syntax requires an explicit shell command.
 There is no generic application-readiness check or interactive terminal support.
@@ -45,15 +46,15 @@ There is no generic application-readiness check or interactive terminal support.
 
 - **Test scope**: a lifetime owned by one ordinary test body. The framework controls naming, discovery, selection, assertions, scheduling, and reporting.
 - **Command**: nonempty argv with a nonempty executable, an optional working directory, and optional environment entries. Argument boundaries, empty argument values, and environment values are preserved. NUL in argv, working directory, or environment entries is rejected before execution.
-- **Result**: exit code, stdout, and stderr. Output streams remain separate. Valid UTF-8 command text and ordering within each stream are preserved; ordering between streams is not defined.
+- **Result**: exit code, stdout, and stderr. Output streams remain separate. Ordering between streams is not defined.
 - **Environment**: command and file operations scoped to one case container.
 
 Languages may expose command output as text or bytes; their READMEs define non-UTF-8 handling.
 File APIs always transfer exact bytes.
 A nonzero application exit code is a command result, not an infrastructure error.
 Daemon failures, attachment failures, decode errors, cancellation, and deadline expiry are errors.
-An exit code is valid only after successful execution and inspection.
-Command results and execution errors retain output already captured.
+An exit code is valid only when execution succeeds without an infrastructure error.
+Captured output on failure depends on what the backend exposes. Each language README defines its partial-output and decoding limits.
 Cancelling or abandoning the whole test scope may instead propagate framework cancellation without delivering a command outcome.
 Each language README explains that boundary and its error representation.
 
@@ -79,16 +80,16 @@ Path-probe exit codes other than `0` or `1` are infrastructure errors, not succe
 ## Lifecycle, deadlines, and cancellation
 
 The helper starts a one-minute operation budget before inspecting the local image.
-An absent image causes an error without a pull.
-Each invocation resolves an immutable image ID, retains it with a stopped lease container, and starts a fresh case container with the image's entrypoint.
+An absent image causes an error before container startup.
+Each invocation starts a fresh case container from the resolved image with the image's entrypoint.
 All case operations share that budget.
 The library does not queue tests or impose a suite-wide concurrency limit.
 
-On completion, failure, or cancellation, the helper attempts to remove the case container with a fresh 30-second budget.
-It removes the stopped lease with a separate fresh 30-second budget and preserves the caller-owned image.
+On completion or failure, the helper attempts to remove its case container and preserves the caller-owned image.
+Resource reapers, cancellation recovery, and cleanup timing follow the backend and language-specific scope implementation.
 Cleanup errors are reported according to the language's error model.
 The operation budget bounds library operations, not arbitrary caller code.
-See each language README for the framework's cancellation behavior.
+See each language README for cancellation behavior and limits on startup or cleanup requests.
 
 Closing an exec connection does not prove that the remote process stopped.
 Container cleanup is the final process boundary.
@@ -104,8 +105,8 @@ Connection support differs by implementation.
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Go         | Testcontainers configuration, including configured TLS, with negotiated or explicit API versions. Initial TLS dialing follows the upstream dialer. |
 | Haskell    | Unix sockets and HTTP/TCP. Unversioned Engine endpoints; TLS and explicit API-version overrides are rejected.                                      |
-| TypeScript | Unix sockets and HTTP/TCP. Unversioned Engine endpoints; TLS and explicit API-version overrides are rejected.                                      |
-| Rust       | Unix sockets and HTTP/TCP with API negotiation. TLS and explicit API-version overrides are rejected.                                               |
+| TypeScript | Testcontainers Node.js connection discovery and configuration. See its language guide for supported endpoints and cancellation limits.             |
+| Rust       | Testcontainers Rust connection configuration and API negotiation. See its language guide for supported endpoints and cleanup limits.               |
 
 Use the language README for endpoint configuration and transport limits.
 Support in one implementation does not imply support in another.

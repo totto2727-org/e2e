@@ -58,7 +58,7 @@ spec = do
 {-# OPTIONS_GHC -F -pgmF hspec-discover #-}
 ```
 
-[Workflow example](../.agents/skills/document-e2e-scenarios/references/example/haskell/MultipleScenariosSpec.hs) · [Expected behavior](../.agents/skills/document-e2e-scenarios/references/example/haskell/MultipleScenariosSpec.md)
+[Workflow example](../.agents/skills/cli-e2e/references/example/haskell/MultipleScenariosSpec.hs) · [Expected behavior](../.agents/skills/cli-e2e/references/example/haskell/MultipleScenariosSpec.md)
 
 ## Values and operations
 
@@ -69,6 +69,7 @@ spec = do
 | Scoped lifecycle             | `withEnvironment :: String -> (Environment -> IO a) -> IO a`                             |
 | Command                      | `Command { args :: [String], workingDir :: Maybe String, env :: [String] }`              |
 | Result                       | `Result { exitCode :: Int, stdout :: ByteString, stderr :: ByteString }`                 |
+| Captured output              | `Output { capturedStdout :: ByteString, capturedStderr :: ByteString }`                  |
 | Execute                      | `run :: Environment -> Command -> IO Result`                                             |
 | Exact command assertion      | `checkCommand :: Environment -> Command -> Result -> IO ()`                              |
 | Write bytes                  | `writeFile :: Environment -> FilePath -> ByteString -> IO ()`                            |

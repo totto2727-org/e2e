@@ -5,25 +5,25 @@ For installation, public API behavior, and consumer requirements, use the [root 
 
 ## Repository structure
 
-| Path                                                        | Maintained content                                                   |
-| ----------------------------------------------------------- | -------------------------------------------------------------------- |
-| `go/cli/`                                                   | Go library and native tests.                                         |
-| `go/e2e/`                                                   | Go Docker tests, selected with the `e2e` build tag.                  |
-| `haskell/src/`, `haskell/test/`, `haskell/e2e/`             | Haskell library, native Hspec specs, and Docker Hspec specs.         |
-| `typescript/src/`, `typescript/test/`                       | TypeScript library and native, package, and Docker Vitest projects.  |
-| `rust/src/`, `rust/tests/`                                  | Rust library and native or ignored Docker tests.                     |
-| `fixtures/cli/Dockerfile`                                   | Shared Linux application image for acceptance tests.                 |
-| `.agents/skills/document-e2e-scenarios/references/example/` | Equivalent public-API consumer examples and their sibling documents. |
+| Path                                            | Maintained content                                                   |
+| ----------------------------------------------- | -------------------------------------------------------------------- |
+| `go/cli/`                                       | Go library and native tests.                                         |
+| `go/e2e/`                                       | Go Docker tests, selected with the `e2e` build tag.                  |
+| `haskell/src/`, `haskell/test/`, `haskell/e2e/` | Haskell library, native Hspec specs, and Docker Hspec specs.         |
+| `typescript/src/`, `typescript/test/`           | TypeScript library and native, package, and Docker Vitest projects.  |
+| `rust/src/`, `rust/tests/`                      | Rust library and native or ignored Docker tests.                     |
+| `fixtures/cli/Dockerfile`                       | Shared Linux application image for acceptance tests.                 |
+| `.agents/skills/cli-e2e/references/example/`    | Equivalent public-API consumer examples and their sibling documents. |
 
 ## Documentation ownership
 
-| Document                                                                   | Canonical content                                                                                        |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| [Root README](./README.md)                                                 | Purpose, language-independent public contract, implementation status, and links to language guides.      |
-| Language READMEs                                                           | Consumer installation, language-specific public APIs, limitations, and links to relevant examples.       |
-| Example sources and sibling Markdown                                       | Concrete usage and the behavior each example actually verifies.                                          |
-| [document-e2e-scenarios](./.agents/skills/document-e2e-scenarios/SKILL.md) | Language-independent scenario design and documentation guidance, with links to examples.                 |
-| This AGENTS.md                                                             | Maintainer setup, toolchains, architecture constraints, task orchestration, and repository verification. |
+| Document                                     | Canonical content                                                                                         |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| [Root README](./README.md)                   | Purpose, language-independent public contract, implementation status, and links to language guides.       |
+| Language READMEs                             | Consumer installation, language-specific public APIs, limitations, and links to relevant examples.        |
+| Example sources and sibling Markdown         | Concrete usage and the behavior each example actually verifies.                                           |
+| [cli-e2e](./.agents/skills/cli-e2e/SKILL.md) | Language-independent scenario design, implementation, and documentation guidance, with links to examples. |
+| This AGENTS.md                               | Maintainer setup, toolchains, architecture constraints, task orchestration, and repository verification.  |
 
 Link to the canonical document instead of repeating its content in another guide or skill.
 Language-specific implementation guidance belongs in the language README and examples, not a separate implementation skill.

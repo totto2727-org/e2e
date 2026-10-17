@@ -20,7 +20,7 @@ export default defineConfig({
     ignorePatterns: [
       ...ignorePatterns,
       // This documentation snippet uses dependencies supplied by the consumer's project.
-      '.agents/skills/document-e2e-scenarios/references/example/typescript/**',
+      '.agents/skills/cli-e2e/references/example/typescript/**',
     ],
   },
   run: {

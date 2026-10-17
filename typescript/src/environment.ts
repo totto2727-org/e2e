@@ -1,9 +1,11 @@
 import { posix } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
+import { pipeline } from 'node:stream/promises'
 
 import tar from 'tar-stream'
+import type { StartedTestContainer } from 'testcontainers'
 
-import { collect, Demultiplexer, DockerError, json, response, stringField, type Transport } from './engine.js'
+import { untilCancelled } from './cancellation.js'
+import { DockerError, dockerFailure } from './errors.js'
 
 export interface Command {
   args: readonly string[]
@@ -60,65 +62,41 @@ export interface Environment {
 }
 
 export class DockerEnvironment implements Environment {
-  private readonly transport: Transport
-  private readonly container: string
+  private readonly container: StartedTestContainer
   readonly signal: AbortSignal
 
-  constructor(transport: Transport, container: string, signal: AbortSignal) {
-    this.transport = transport
+  constructor(container: StartedTestContainer, signal: AbortSignal) {
     this.container = container
     this.signal = signal
   }
 
   async run(command: Command): Promise<Result> {
     validateCommand(command)
-    const decoder = new Demultiplexer()
+    const env = Object.fromEntries(
+      (command.env ?? []).map((entry) => {
+        const separator = entry.indexOf('=')
+        if (separator < 1) throw new TypeError('Environment entries must use NAME=value')
+        return [entry.slice(0, separator), entry.slice(separator + 1)]
+      }),
+    )
     try {
       this.signal.throwIfAborted()
-      const exec = stringField(
-        await json(this.transport, 'POST', `/containers/${encodeURIComponent(this.container)}/exec`, this.signal, {
-          AttachStdout: true,
-          AttachStderr: true,
-          Tty: false,
-          Cmd: command.args,
-          WorkingDir: command.workingDir ?? '',
-          Env: command.env ?? [],
+      const result = await untilCancelled(
+        this.container.exec([...command.args], {
+          ...(command.workingDir === undefined ? {} : { workingDir: command.workingDir }),
+          env,
         }),
-        'Id',
-      )
-      const stream = await response(
-        this.transport,
-        'POST',
-        `/exec/${encodeURIComponent(exec)}/start`,
         this.signal,
-        Buffer.from(JSON.stringify({ Detach: false, Tty: false })),
       )
-      try {
-        for await (const chunk of stream) decoder.push(chunk as Uint8Array)
-        decoder.finish()
-      } finally {
-        stream.destroy()
-      }
-      for (;;) {
-        const inspect = await json(this.transport, 'GET', `/exec/${encodeURIComponent(exec)}/json`, this.signal)
-        if (
-          !inspect ||
-          typeof inspect !== 'object' ||
-          !('Running' in inspect) ||
-          typeof inspect.Running !== 'boolean'
-        ) {
-          throw new DockerError('Invalid Docker exec inspection')
-        }
-        if (inspect.Running) {
-          await delay(100, undefined, { signal: this.signal })
-          continue
-        }
-        if (!('ExitCode' in inspect) || !Number.isInteger(inspect.ExitCode))
-          throw new DockerError('Invalid Docker exit code')
-        return { exitCode: inspect.ExitCode as number, ...decoder.output(true) }
-      }
+      if (!Number.isInteger(result.exitCode) || result.exitCode < 0)
+        throw new DockerError('Testcontainers did not report an application exit code')
+      return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }
     } catch (cause) {
-      throw new ExecutionError(decoder.output(), this.signal.aborted ? this.signal.reason : cause)
+      // Testcontainers exposes output only after exec succeeds, never on rejection.
+      throw new ExecutionError(
+        { stdout: '', stderr: '' },
+        this.signal.aborted ? this.signal.reason : cause instanceof DockerError ? cause : dockerFailure(cause),
+      )
     }
   }
 
@@ -136,54 +114,59 @@ export class DockerEnvironment implements Environment {
   async writeFile(path: string, bytes: Uint8Array): Promise<void> {
     pathValue(path)
     this.signal.throwIfAborted()
-    const pack = tar.pack()
-    const collected = collect(pack)
-    pack.entry({ name: posix.basename(path), mode: 0o644, type: 'file' }, Buffer.from(bytes), (error) => {
-      if (error) pack.destroy(error)
-      else pack.finalize()
-    })
-    const archive = await collected
-    const res = await response(
-      this.transport,
-      'PUT',
-      `/containers/${encodeURIComponent(this.container)}/archive?path=${encodeURIComponent(posix.dirname(path))}`,
-      this.signal,
-      archive,
-    )
-    await collect(res)
+    if (!(await this.probe('-d', posix.dirname(path)))) throw new Error(`Parent directory does not exist: ${path}`)
+    try {
+      await untilCancelled(
+        this.container.copyContentToContainer([{ target: path, content: Buffer.from(bytes), mode: 0o644 }]),
+        this.signal,
+      )
+    } catch (cause) {
+      throw this.signal.aborted ? this.signal.reason : dockerFailure(cause)
+    }
   }
 
   async readFile(path: string): Promise<Buffer> {
     pathValue(path)
-    const res = await response(
-      this.transport,
-      'GET',
-      `/containers/${encodeURIComponent(this.container)}/archive?path=${encodeURIComponent(path)}`,
-      this.signal,
-    )
-    const archive = await collect(res)
     this.signal.throwIfAborted()
-    return new Promise((resolve, reject) => {
-      const extract = tar.extract()
-      const files: Buffer[] = []
-      let invalid = false
-      extract.on('entry', (header, stream, next) => {
-        if (header.type !== 'file') invalid = true
-        void collect(stream).then(
-          (bytes) => {
-            files.push(bytes)
-            next()
-          },
-          (error: unknown) => extract.destroy(error instanceof Error ? error : new Error(String(error))),
-        )
+    const copying = this.container.copyArchiveFromContainer(path)
+    let archive: NodeJS.ReadableStream
+    try {
+      archive = await untilCancelled(copying, this.signal)
+    } catch (cause) {
+      // A response that arrives after cancellation is still ours to close.
+      void copying
+        .then((stream) => {
+          if ('destroy' in stream && typeof stream.destroy === 'function') stream.destroy()
+        })
+        .catch(() => {})
+      throw this.signal.aborted ? this.signal.reason : dockerFailure(cause)
+    }
+    const extract = tar.extract()
+    const files: Buffer[] = []
+    let invalid = false
+    extract.on('entry', (header, stream, next) => {
+      if (header.type !== 'file') invalid = true
+      const chunks: Buffer[] = []
+      stream.on('data', (chunk: unknown) => {
+        if (!(chunk instanceof Uint8Array)) {
+          extract.destroy(new DockerError('Expected archive byte stream'))
+          return
+        }
+        chunks.push(Buffer.from(chunk))
       })
-      extract.on('error', reject)
-      extract.on('finish', () => {
-        if (invalid || files.length !== 1) reject(new DockerError('Expected one regular file in Docker archive'))
-        else resolve(files[0]!)
+      stream.on('error', (error: Error) => extract.destroy(error))
+      stream.on('end', () => {
+        files.push(Buffer.concat(chunks))
+        next()
       })
-      extract.end(archive)
     })
+    try {
+      await pipeline(archive, extract, { signal: this.signal })
+      if (invalid || files.length !== 1) throw new DockerError('Expected one regular file in Docker archive')
+      return files[0]!
+    } catch (cause) {
+      throw this.signal.aborted ? this.signal.reason : cause
+    }
   }
 
   async checkFile(path: string, expected: Uint8Array): Promise<void> {

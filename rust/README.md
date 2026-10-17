@@ -2,10 +2,13 @@
 
 For library users who know Tokio tests.
 See [shared prerequisites](../README.md#prerequisites-and-setup), [values](../README.md#shared-values), and [operations](../README.md#shared-operations).
+Containers and command transport use [Testcontainers 0.28](https://docs.rs/testcontainers/0.28.0/testcontainers/).
 
 ## Setup
 
-Requirements: Rust 1.88 or newer. No OpenSSL or pkg-config dependency.
+Requirements: Rust 1.88 or newer and a native C toolchain for Testcontainers' default `ring` TLS provider.
+No OpenSSL or pkg-config dependency is required.
+The Linux image needs `sh` when `Command.working_dir` is set.
 
 > [!IMPORTANT]
 > The crates.io setup below requires publication of a matching package.
@@ -37,7 +40,7 @@ async fn greeting() -> Result<(), ScopeError<Error>> {
 }
 ```
 
-[Workflow example](../.agents/skills/document-e2e-scenarios/references/example/rust/multiple_scenarios.rs) · [Expected behavior](../.agents/skills/document-e2e-scenarios/references/example/rust/multiple_scenarios.md)
+[Workflow example](../.agents/skills/cli-e2e/references/example/rust/multiple_scenarios.rs) · [Expected behavior](../.agents/skills/cli-e2e/references/example/rust/multiple_scenarios.md)
 
 ```rust,ignore
 pub async fn with_environment<F, Fut, T, E>(
@@ -45,14 +48,14 @@ pub async fn with_environment<F, Fut, T, E>(
     callback: F,
 ) -> Result<T, ScopeError<E>>
 where
-    F: FnOnce(Environment) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<T, E>> + Send + 'static,
-    T: Send + 'static,
-    E: Send + 'static;
+    F: FnOnce(Environment) -> Fut,
+    Fut: Future<Output = Result<T, E>>;
 ```
 
-Move owned fixtures into the callback.
+Callbacks can borrow fixtures and use non-`Send` values.
 No future boxing or library-specific callback error conversion is required.
+Testcontainers' file-copy future is not `Send`, so a scope that reads files cannot be passed to `tokio::spawn`.
+Await it directly in the native Tokio test.
 
 | Public value               | Fields or constructor                                                  |
 | -------------------------- | ---------------------------------------------------------------------- |
@@ -78,54 +81,55 @@ Except for `container_id`, all methods are async.
 | `check_symlink(path: &str, literal_target: &str)` | `Result<(), Error>`                                               |
 | `container_id()`                                  | `&str`, immutable identity only. No mutable Docker client access. |
 
-| Language-specific behavior | Constraint                                                                                                                  |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Additional invalid input   | Empty image, empty path, or NUL in image, paths, or literal link targets. Reject before the corresponding Docker operation. |
-| Output                     | Separate byte vectors. No trimming or UTF-8 conversion.                                                                     |
-| `read_file`                | Exactly one regular-file tar archive entry.                                                                                 |
+| Language-specific behavior | Constraint                                                                                                                                                                                                      |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Additional invalid input   | Empty image, empty path, NUL input, or an environment entry without a nonempty key and `=` separator.                                                                                                           |
+| Output                     | Separate byte vectors. No trimming or UTF-8 conversion. Application nonzero exits remain results.                                                                                                               |
+| Working directory          | A fixed `sh` script changes directory, then executes argv. Caller paths and arguments are positional parameters, not script interpolation. A failed directory change returns the shell's status and diagnostic. |
+| `read_file`                | Native `ContainerAsync::copy_file_from` reads the first regular file, skips additional archive entries, and rejects directories. Symbolic-link behavior follows Docker.                                         |
+| `write_file`               | Testcontainers has no public running-container upload method. The helper uses its configured, re-exported Bollard client and a single-file tar archive with mode `0644`.                                        |
 
 ### Errors
 
-| Error or condition                     | Behavior                                                                                                                                   |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Error::Execution { failure, output }` | Bytes received before transport failure, deadline, or cancellation. No valid exit status.                                                  |
-| `ExecutionFailure`                     | `Deadline`, `Cancelled`, native `Docker` error, or `Protocol` error.                                                                       |
-| `ScopeError<E>`                        | `Infrastructure(Error)`, `Callback(E)`, or `Cleanup { prior: Option<Box<ScopeError<E>>>, errors: Vec<Error> }`.                            |
-| Cleanup failure                        | Retain the prior typed callback or infrastructure error and every resource cleanup failure.                                                |
-| Callback assertion panic               | Resume unwinding with the original payload after cleanup. Report accompanying cleanup failures to stderr instead of replacing the payload. |
+| Error or condition                     | Behavior                                                                                                                                                   |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Error::Execution { failure, output }` | Retains bytes already drained by the helper. No valid exit status. Stdout is drained before stderr, so unread stderr is not guaranteed on failure.         |
+| `ExecutionFailure`                     | `Deadline`, `Cancelled`, boxed native `Testcontainers` error, `Io`, or `Protocol`.                                                                         |
+| Other infrastructure errors            | `Error::Testcontainers`, `Docker` for image inspection or upload, and `Archive` for local tar creation. Native causes remain available through `source()`. |
+| `ScopeError<E>`                        | `Infrastructure(Error)`, `Callback(E)`, or `Cleanup { prior: Option<Box<ScopeError<E>>>, errors: Vec<Error> }`.                                            |
+| Explicit cleanup failure               | Retains the prior typed callback error. Testcontainers' Drop fallback logs its own failures instead of returning them.                                     |
+| Callback panic                         | Resumes the original payload after explicit cleanup. An accompanying cleanup failure is reported to stderr.                                                |
 
 ## Lifecycle and cancellation
 
-See the shared [lifecycle, deadlines, and cancellation](../README.md#lifecycle-deadlines-and-cancellation) contract.
+See the shared [lifecycle, deadlines, and cancellation](../README.md#lifecycle-deadlines-and-cancellation) contract, with these Rust-specific limits.
 
-| Rust-specific behavior       | Constraint                                                                                                                                            |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Operation deadline           | Starts on the helper's first poll, before connection negotiation.                                                                                     |
-| Callback completion or panic | Cancel the environment token, including escaped clones, before cleanup.                                                                               |
-| Uncertain create response    | Keep inspecting within the cleanup budget. The first 404 is not proof of absence. Retain a typed failure if ownership or absence cannot be confirmed. |
-| Exec timeout or cancellation | Drop Bollard's owned stream and input writer. Output readers do not outlive the operation.                                                            |
+| Rust-specific behavior           | Constraint                                                                                                                                                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Operation deadline               | One 60-second budget starts before client setup and local image inspection. It does not preempt arbitrary callback code.                                                                                      |
+| Image selection                  | Inspect the caller's local image, then start its immutable ID through `GenericImage` and `AsyncRunner`. No image lease is created or image removal requested.                                                 |
+| Pull behavior                    | Testcontainers has no `Never` pull policy. A create-time 404 can trigger its pull fallback even after successful local inspection.                                                                            |
+| Callback completion or panic     | Cancel escaped environment handles, then call `ContainerAsync::rm`. Handles cannot extend container ownership.                                                                                                |
+| Cleanup timing                   | Wait at most 30 seconds for active operations to release scope access. Removal and Drop use Testcontainers' own request timeouts, not a strict 30-second total budget.                                        |
+| Scope future dropped             | Cancel environment operations and use Testcontainers' native Drop cleanup. No custom supervisor or cleanup retry protocol runs. Keep the runtime alive while dropping the scope.                              |
+| Exec timeout or cancellation     | Drop native output readers. Testcontainers owns its background stream task, which can remain until the command emits more output or the container is removed. Immediate connection closure is not guaranteed. |
+| Startup failure or lost response | Recovery follows Testcontainers. No stronger guarantee is made for a lost creation response or a failure before a container guard exists.                                                                     |
+| Process signals                  | Testcontainers' `watchdog` feature is enabled for its SIGINT, SIGTERM, and SIGQUIT recovery. This is not a guarantee for abrupt runtime termination or SIGKILL.                                               |
 
 > [!IMPORTANT]
-> Dropping `with_environment` signals cancellation to its supervised task.
-> Keep the Tokio runtime alive until background cleanup finishes, including up to two sequential 30-second cleanup budgets.
-> An aborted caller cannot receive the eventual cleanup error or panic.
-> Runtime or process termination cannot guarantee cleanup.
-
-> [!IMPORTANT]
-> Cancellation is cooperative. Blocking synchronous callback code can delay cancellation and cleanup indefinitely.
-> Detached callback tasks remain caller-owned, but escaped environment operations observe cancellation.
+> Leave `TESTCONTAINERS_COMMAND` unset for automatic Drop cleanup.
+> Testcontainers' `keep` setting disables that fallback.
+> Blocking callback code and detached tasks remain caller-owned and can delay cleanup.
 
 ## Docker endpoint support
 
-| Setting or capability                    | Support                                                                                                                                   |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Default `DOCKER_HOST`                    | `unix:///var/run/docker.sock`                                                                                                             |
-| Accepted endpoints                       | `unix:///path`, `http://host:port`, `tcp://host:port`                                                                                     |
-| TLS/HTTPS and other schemes              | Rejected.                                                                                                                                 |
-| `DOCKER_TLS_VERIFY`                      | Reject nonempty values other than `0`.                                                                                                    |
-| `DOCKER_CERT_PATH`, `DOCKER_API_VERSION` | Reject when set, including empty values.                                                                                                  |
-| API version                              | [Bollard](https://docs.rs/bollard/) negotiates the minimum of the daemon's API and its compile-time default (`1.53` with Bollard 0.21.1). |
-| Other unsupported features               | Docker contexts, SSH endpoints, Windows containers, interactive stdin, PTY, and service/readiness orchestration.                          |
+Endpoint discovery, TLS, and connection configuration use [Testcontainers' Docker host resolution](https://docs.rs/testcontainers/0.28.0/testcontainers/#docker-host-resolution).
+The same public `docker_client_instance` factory supplies image inspection and upload.
+This package does not maintain a separate endpoint resolver or API-version negotiation layer.
+
+Testcontainers' default features support Unix sockets, HTTP/TCP, and HTTPS/TLS.
+Its optional properties-file configuration is not enabled by this package.
+Docker contexts, SSH endpoints, Windows containers, interactive stdin, and PTY are not part of this library's public contract.
 
 ## Development
 

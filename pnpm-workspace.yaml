@@ -15,5 +15,8 @@ overrides:
 
 minimumReleaseAge: 1440
 minimumReleaseAgeStrict: true
+
 allowBuilds:
-  vite-plus: false
+  cpu-features: true
+  protobufjs: true
+  ssh2: true

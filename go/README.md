@@ -47,7 +47,7 @@ func TestVersion(t *testing.T) {
 ```
 
 For sequential tests, omit `t.Parallel()`.
-For more cases, see the [Go example](../.agents/skills/document-e2e-scenarios/references/example/multiple_scenarios_test.go).
+For more cases, see the [Go example](../.agents/skills/cli-e2e/references/example/multiple_scenarios_test.go).
 
 ## API
 

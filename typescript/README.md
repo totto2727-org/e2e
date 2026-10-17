@@ -1,7 +1,7 @@
 # TypeScript CLI E2E
 
 `@totto2727/e2e-cli` provides scoped container environments for TypeScript users writing CLI tests.
-It implements the [shared contract](../README.md) without a test-framework dependency.
+It uses [Testcontainers for Node.js](https://node.testcontainers.org/) and implements the [shared contract](../README.md) without a test-framework dependency.
 
 ## Setup
 
@@ -53,7 +53,7 @@ There is no `/vitest` adapter.
 
 > [!IMPORTANT]
 > Await all environment operations before the callback returns.
-> Forward `context.signal` to cancel library operations when Vitest cancels the test.
+> Forward `context.signal` to stop waiting for library operations when Vitest cancels the test.
 > The library cannot terminate caller code that ignores cancellation or blocks the JavaScript event loop.
 
 ## Values and operations
@@ -90,51 +90,55 @@ The promise returns the callback value after cleanup succeeds.
 | `checkDirectory(path: string)`                      | `Promise<void>`   |
 | `checkSymlink(path: string, literalTarget: string)` | `Promise<void>`   |
 
-Successful command output requires valid UTF-8 and preserves text, including trailing newlines.
-Invalid UTF-8 causes an execution error, not a repaired result.
+Environment entries must use `NAME=value` with a nonempty name.
+Empty values and values that contain `=` are preserved, and the last entry for a duplicate name wins.
+
+Testcontainers supplies separately decoded stdout and stderr, including trailing newlines.
+Its string decoding does not guarantee strict UTF-8 validation or preservation across split multibyte sequences.
 `Environment` exposes no Docker client.
 
 ## Errors, deadlines and cleanup
 
-| Condition                                                             | Rejection or cause                                                                       |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Invalid command strings, empty argv or executable, or empty file path | `TypeError`. NUL is invalid in command strings, file paths, and link targets.            |
-| Command execution failure                                             | `ExecutionError` with `partialResult` and the original `cause`, but no exit code.        |
-| Docker failure                                                        | `DockerError`, with optional `statusCode`. Daemon diagnostics do not enter child stderr. |
-| Operation deadline                                                    | `DeadlineError`.                                                                         |
-| Callback rejection                                                    | The original value, including a non-Error value, unless cleanup also fails.              |
-| Callback returns after cancellation                                   | The cancellation reason.                                                                 |
-| Multiple operation or cleanup failures                                | `AggregateError` containing the failures.                                                |
-| Cleanup failure alone                                                 | The cleanup error.                                                                       |
+| Condition                                                                                                         | Rejection or cause                                                                         |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Invalid command strings, empty argv or executable, invalid image, empty file path, or malformed environment entry | `TypeError`. NUL is invalid in command strings, image names, file paths, and link targets. |
+| Command execution failure                                                                                         | `ExecutionError` with empty `partialResult` streams and a `cause`, but no exit code.       |
+| Docker failure                                                                                                    | `DockerError`, with optional `statusCode`. Daemon diagnostics do not enter child stderr.   |
+| Operation deadline                                                                                                | `DeadlineError`.                                                                           |
+| Callback rejection                                                                                                | The original value, including a non-Error value, unless cleanup also fails.                |
+| Callback returns after cancellation                                                                               | The cancellation reason.                                                                   |
+| Multiple operation or cleanup failures                                                                            | `AggregateError` containing the failures.                                                  |
+| Cleanup failure alone                                                                                             | The cleanup error.                                                                         |
 
-An `ExecutionError` cause can be a `DockerError`, `DeadlineError`, cancellation reason, or native I/O or decoding error.
-Partial output uses replacement characters for invalid or incomplete UTF-8 sequences.
-An exit code requires exec inspection with `Running: false`, not output EOF alone.
+An `ExecutionError` cause can be a `DockerError`, `DeadlineError`, or cancellation reason.
+A `DockerError` retains the underlying Testcontainers error as its `cause`.
+Testcontainers does not expose partial output when exec fails.
+The library rejects missing or negative exit codes, but Testcontainers does not verify `Running: false` after output closes.
 
-| Budget or boundary  | TypeScript behavior                                                                                                                       |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Operation           | Fixed 60 seconds from helper invocation, including image inspection and container startup. Vitest scheduling time is outside this budget. |
-| Cleanup             | Fresh 30 seconds per owned container, up to 60 seconds total. Lease cleanup is attempted even if case cleanup fails.                      |
-| Vitest timeout      | Allow for operation and cleanup, for example `125_000` milliseconds as above.                                                             |
-| Cancellation        | Destroys the HTTP request and attached response stream. `environment.signal` lets caller code cooperate.                                  |
-| Callback completion | Closes `environment.signal` and its owned connections.                                                                                    |
+| Budget or boundary  | TypeScript behavior                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Operation           | Fixed 60-second budget from helper invocation, including startup. Vitest scheduling is outside this budget.                                       |
+| Cleanup             | Fresh 30-second waiting budget for `stop({ timeout: 0, remove: true, removeVolumes: true })`. Underlying requests can continue after this budget. |
+| Vitest timeout      | Allow for operation and cleanup, for example `125_000` milliseconds as above.                                                                     |
+| Cancellation        | Rejects pending operation waits and signals caller code. Testcontainers does not expose cancellation of startup, exec, or copy requests.          |
+| Callback completion | Closes `environment.signal`, then attempts to stop and remove the case container.                                                                 |
 
-See [shared lifecycle and cleanup limits](../README.md#lifecycle-deadlines-and-cancellation) for image retention, container removal, and unresolved creation outcomes.
-The library removes only containers with matching ownership labels.
+See [shared lifecycle and cleanup limits](../README.md#lifecycle-deadlines-and-cancellation) for the common lifecycle.
+Containers that finish startup after cancellation receive a cleanup attempt when startup resolves.
+Cleanup failure at that point is logged through Testcontainers because the caller's promise has already settled.
+Partial startup failures rely on Testcontainers' resource reaper, not immediate scope cleanup.
+Do not disable the resource reaper when you need this recovery.
+Application images are not removed, but there is no image lease against external pruning.
 
 ## Docker support
 
-| Setting or capability  | Support                                                                                                                       |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Default `DOCKER_HOST`  | `unix:///var/run/docker.sock`                                                                                                 |
-| Other endpoints        | `unix:///path/to/docker.sock`, `http://host:port`, `tcp://host:port`                                                          |
-| Docker CLI contexts    | Not read. Set `DOCKER_HOST` for a nondefault socket.                                                                          |
-| Transport              | Linux-container Engine over Unix sockets or unencrypted HTTP.                                                                 |
-| Rejected configuration | Nonempty `DOCKER_TLS_VERIFY` or `DOCKER_CERT_PATH`, HTTPS, URL credentials, URL paths other than `/`, queries, and fragments. |
-| Unsupported            | TLS, Windows named pipes, Windows containers, and HTTP 101 hijacking.                                                         |
-| Exec stream            | HTTP 200 raw stream with `{ Detach: false, Tty: false }`.                                                                     |
-| File transfer          | Docker archive endpoint, without command fallback.                                                                            |
-| Data size              | The adapter buffers output and archives in memory. Use small CLI test fixtures.                                               |
+| Setting or capability | Support                                                                                                                                                                                                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime configuration | Testcontainers handles runtime discovery, `DOCKER_HOST`, and TLS settings. See its [configuration](https://node.testcontainers.org/configuration/) and [supported runtimes](https://node.testcontainers.org/supported-container-runtimes/). Use Linux containers. |
+| Application image     | Must exist locally. `PullPolicy.neverPull()` prevents application-image downloads.                                                                                                                                                                                |
+| Resource reaper       | Testcontainers manages Ryuk and its helper image, which can require a download and access to the Docker socket.                                                                                                                                                   |
+| File transfer         | `copyContentToContainer` writes mode `0644`. `copyArchiveFromContainer` supplies the archive for byte-preserving reads.                                                                                                                                           |
+| Data size             | Output and file contents are buffered in memory. Use small CLI test fixtures.                                                                                                                                                                                     |
 
 ## Development
 

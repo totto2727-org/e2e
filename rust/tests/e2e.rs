@@ -49,7 +49,12 @@ async fn file_workflow() -> Result<(), ScopeError<Error>> {
         env.check_file("/workspace/result.txt", b"first\nsecond\n")
             .await?;
         env.write_file("/workspace/binary", &[0, 255, 10]).await?;
-        env.check_file("/workspace/binary", &[0, 255, 10]).await
+        env.check_file("/workspace/binary", &[0, 255, 10]).await?;
+        env.check_command(
+            Command::new(["stat", "-c", "%a", "/workspace/binary"]),
+            expected(0, "644\n", ""),
+        )
+        .await
     })
     .await
 }
@@ -134,9 +139,9 @@ async fn physical_paths() -> Result<(), ScopeError<Error>> {
 
 #[tokio::test]
 #[ignore = "requires caller-built e2e-example:local and Docker, takes 60 seconds"]
-async fn deadline() -> Result<(), ScopeError<Error>> {
+async fn deadline() -> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
-    with_environment(IMAGE, |env| async move {
+    let id = with_environment(IMAGE, |env| async move {
         assert!(matches!(
             env.run(Command::new(["sleep", "infinity"])).await,
             Err(Error::Execution {
@@ -144,10 +149,20 @@ async fn deadline() -> Result<(), ScopeError<Error>> {
                 ..
             })
         ));
-        Ok(())
+        Ok::<_, Error>(env.container_id().to_string())
     })
     .await?;
     assert!(start.elapsed() < Duration::from_secs(70));
+    let docker = testcontainers::core::client::docker_client_instance().await?;
+    assert!(matches!(
+        docker.inspect_container(&id, None).await,
+        Err(
+            testcontainers::bollard::errors::Error::DockerResponseServerError {
+                status_code: 404,
+                ..
+            }
+        )
+    ));
     Ok(())
 }
 
@@ -155,44 +170,155 @@ async fn deadline() -> Result<(), ScopeError<Error>> {
 #[ignore = "requires caller-built e2e-example:local and Docker"]
 async fn scopes_are_fresh_remove_owned_containers_and_preserve_image()
 -> Result<(), Box<dyn std::error::Error>> {
-    use bollard::{Docker, query_parameters::ListContainersOptionsBuilder};
-    let docker = Docker::connect_with_defaults()?.negotiate_version().await?;
+    use testcontainers::{bollard, core::client::docker_client_instance};
+    let docker = docker_client_instance().await?;
     let image_before = docker.inspect_image(IMAGE).await?.id;
     let mut ids = Vec::new();
     for _ in 0..2 {
         let inspect = docker.clone();
-        let (id, owner) = with_environment(IMAGE, move |env| async move {
+        let id = with_environment(IMAGE, move |env| async move {
             env.check_missing("/workspace/scoped-fixture").await?;
             env.write_file("/workspace/scoped-fixture", b"owned\n")
                 .await?;
             let info = inspect.inspect_container(env.container_id(), None).await?;
-            let owner = info
-                .config
-                .and_then(|config| config.labels)
-                .and_then(|mut labels| labels.remove("org.totto2727.e2e.rust.owner"))
-                .ok_or_else(|| Error::Assertion("scope owner label absent".into()))?;
-            Ok::<_, Error>((env.container_id().to_string(), owner))
+            assert_eq!(
+                info.config
+                    .and_then(|config| config.labels)
+                    .and_then(|mut labels| labels.remove("org.testcontainers.managed-by")),
+                Some("testcontainers".into())
+            );
+            Ok::<_, Error>(env.container_id().to_string())
         })
         .await?;
-        let filters = std::collections::HashMap::from([(
-            "label".to_string(),
-            vec![format!("org.totto2727.e2e.rust.owner={owner}")],
-        )]);
         assert!(
-            docker
-                .list_containers(Some(
-                    ListContainersOptionsBuilder::default()
-                        .all(true)
-                        .filters(&filters)
-                        .build()
-                ))
-                .await?
-                .is_empty(),
-            "scenario or lease leaked for this scope"
+            matches!(
+                docker.inspect_container(&id, None).await,
+                Err(bollard::errors::Error::DockerResponseServerError {
+                    status_code: 404,
+                    ..
+                })
+            ),
+            "Testcontainers did not remove the scope container"
         );
         ids.push(id);
     }
     assert_ne!(ids[0], ids[1]);
     assert_eq!(docker.inspect_image(IMAGE).await?.id, image_before);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built e2e-example:local and Docker"]
+async fn working_directory_preserves_literal_argv() -> Result<(), ScopeError<Error>> {
+    with_environment(IMAGE, |env| async move {
+        let directory = "/workspace/a 'quoted' $(literal)";
+        env.check_command(
+            Command::new(["mkdir", "--", directory]),
+            expected(0, "", ""),
+        )
+        .await?;
+        env.check_command(
+            Command {
+                working_dir: Some(directory.into()),
+                ..Command::new([
+                    "printf",
+                    "<%s>\n",
+                    "",
+                    "two words",
+                    "$(touch /workspace/injected)",
+                    "'literal'",
+                ])
+            },
+            expected(
+                0,
+                "<>\n<two words>\n<$(touch /workspace/injected)>\n<'literal'>\n",
+                "",
+            ),
+        )
+        .await?;
+        env.check_missing("/workspace/injected").await
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built e2e-example:local and Docker"]
+async fn callback_error_is_preserved_after_container_removal()
+-> Result<(), Box<dyn std::error::Error>> {
+    let result = with_environment(IMAGE, |env| async move {
+        Err::<(), _>((env.container_id().to_string(), 7_u8))
+    })
+    .await;
+    let Err(ScopeError::Callback((id, code))) = result else {
+        panic!("expected original callback error")
+    };
+    assert_eq!(code, 7);
+    let docker = testcontainers::core::client::docker_client_instance().await?;
+    assert!(matches!(
+        docker.inspect_container(&id, None).await,
+        Err(
+            testcontainers::bollard::errors::Error::DockerResponseServerError {
+                status_code: 404,
+                ..
+            }
+        )
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built e2e-example:local and Docker"]
+async fn callback_panic_is_resumed_after_container_removal()
+-> Result<(), Box<dyn std::error::Error>> {
+    use futures_util::FutureExt;
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let scope = with_environment(IMAGE, |env| async move {
+        send.send(env.container_id().to_string())
+            .map_err(|_| Error::Cancelled)?;
+        std::panic::panic_any(123_u32);
+        #[allow(unreachable_code)]
+        Ok::<(), Error>(())
+    });
+    let Err(payload) = std::panic::AssertUnwindSafe(scope).catch_unwind().await else {
+        panic!("expected original panic")
+    };
+    assert_eq!(payload.downcast_ref::<u32>(), Some(&123));
+    let docker = testcontainers::core::client::docker_client_instance().await?;
+    assert!(matches!(
+        docker.inspect_container(&receive.await?, None).await,
+        Err(
+            testcontainers::bollard::errors::Error::DockerResponseServerError {
+                status_code: 404,
+                ..
+            }
+        )
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built e2e-example:local and Docker"]
+async fn dropping_scope_uses_testcontainers_cleanup() -> Result<(), Box<dyn std::error::Error>> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let mut scope = Box::pin(with_environment(IMAGE, |env| async move {
+        send.send(env.container_id().to_string())
+            .map_err(|_| Error::Cancelled)?;
+        std::future::pending::<Result<(), Error>>().await
+    }));
+    let id = tokio::select! {
+        result = &mut scope => panic!("scope unexpectedly completed: {result:?}"),
+        result = receive => result?,
+    };
+    drop(scope);
+    let docker = testcontainers::core::client::docker_client_instance().await?;
+    assert!(matches!(
+        docker.inspect_container(&id, None).await,
+        Err(
+            testcontainers::bollard::errors::Error::DockerResponseServerError {
+                status_code: 404,
+                ..
+            }
+        )
+    ));
     Ok(())
 }

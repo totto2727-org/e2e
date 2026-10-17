@@ -1,17 +1,18 @@
 ---
-name: document-e2e-scenarios
-description: Create English sibling Markdown documents for CLI E2E scenarios, explaining intent, commands, fixtures, ordered execution, observable results, and limitations. Use when adding, changing, reviewing, or backfilling consumer scenario documentation. Do not use for API references, unit-test comments, or general QA plans.
+name: cli-e2e
+description: Design, implement, and document CLI E2E scenarios with the shared environment helpers and the consumer's native test framework. Use when adding, changing, reviewing, or documenting observable CLI workflows. Do not use for library API implementation, unit tests, or general QA plans.
 metadata:
   author: totto2727
   version: 1.1.0
 ---
 
-# Document E2E scenarios
+# CLI E2E
 
-Keep scenario intent beside the executable tests so reviewers can understand the workflow without reconstructing it from helper calls.
+Design tests around observable CLI behavior and keep their intent beside the executable source.
 The library supplements each language and test framework rather than replacing their best practices, standard test structure, or naming conventions.
 Adapt the Markdown scenario titles to those conventions when implementing tests.
-This skill explains how to describe observable behavior, not language syntax or test-framework configuration.
+This skill covers scenario design, implementation, and documentation, not language syntax or test-framework configuration.
+Use the [shared contract](../../../README.md) and its language-guide links for setup and public APIs.
 
 ## Scenario design
 
@@ -43,9 +44,9 @@ Use them to understand the correspondence between scenario intent, executable op
 
 ## Authoring workflow
 
-1. Read the scenario source, called helpers, fixtures, and public API contracts.
+1. Read the public contract and the relevant language guide. For an existing scenario, inspect its source, helpers, and fixtures.
 2. Identify the behavior under test and the observations that distinguish success from failure.
-3. Read a relevant example pair, then copy [the scenario template](assets/scenario-test.template.md) beside the source.
+3. Implement or update the scenario in the consumer's existing test framework. Use the example pairs as references, then copy [the scenario template](assets/scenario-test.template.md) beside the source.
 4. Describe the required initial state, actual invocation order, and assertions for each scenario. Remove unused optional rows instead of leaving empty prose.
 5. Separate command names from their arguments and options. Put each complete invocation and its literal argument order under `Execution flow`.
 6. Separate expected exit status, stdout, stderr, persisted state, filesystem state, and non-mutation guarantees where relevant.

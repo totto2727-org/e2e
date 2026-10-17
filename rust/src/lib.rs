@@ -1,4 +1,4 @@
-//! Async CLI cases in fresh, locally built Linux containers.
+//! Async CLI cases in fresh Testcontainers-managed Linux containers.
 //!
 //! ```no_run
 //! use cli_e2e::{Command, CommandResult, ScopeError, with_environment};
@@ -9,33 +9,31 @@
 //! }).await?;
 //! # Ok(()) }
 //! ```
-use bollard::{
-    API_DEFAULT_VERSION, Docker,
-    container::LogOutput,
-    exec::StartExecResults,
-    models::{ContainerCreateBody, ExecConfig},
-    query_parameters::{
-        CreateContainerOptionsBuilder, DownloadFromContainerOptionsBuilder,
-        RemoveContainerOptionsBuilder, UploadToContainerOptionsBuilder,
-    },
-};
-use futures_util::{FutureExt, StreamExt};
+use futures_util::FutureExt;
 use std::{
-    collections::HashMap,
     fmt,
     future::Future,
-    io::Read,
     panic::AssertUnwindSafe,
     path::Path,
-    sync::atomic::{AtomicU8, Ordering},
+    sync::{Arc, Weak},
     time::Duration,
 };
-use tokio::time::{Instant, timeout_at};
+use testcontainers::{
+    ContainerAsync, GenericImage, TestcontainersError,
+    bollard::{self, query_parameters::UploadToContainerOptionsBuilder},
+    core::{ExecCommand, client::docker_client_instance},
+    runners::AsyncRunner,
+};
+use tokio::{
+    io::AsyncReadExt,
+    sync::RwLock,
+    time::{Instant, timeout, timeout_at},
+};
 use tokio_util::sync::CancellationToken;
 
-const LABEL: &str = "org.totto2727.e2e.rust.owner";
 const CASE_BUDGET: Duration = Duration::from_secs(60);
-const CLEANUP_BUDGET: Duration = Duration::from_secs(30);
+const CLEANUP_LOCK_BUDGET: Duration = Duration::from_secs(30);
+type Container = Arc<RwLock<Option<ContainerAsync<GenericImage>>>>;
 
 /// Argv, optional process working directory, and `KEY=value` environment entries.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -51,10 +49,11 @@ impl Command {
             ..Self::default()
         }
     }
-    /// Validate the executable and reject NUL bytes in command fields.
+    /// Validate the executable and reject NUL bytes or malformed environment entries.
     ///
     /// # Errors
-    /// Returns [`Error::InvalidInput`] for an empty executable or NUL input.
+    /// Returns [`Error::InvalidInput`] for an empty executable, NUL input, or an
+    /// environment entry without a nonempty key and `=` separator.
     pub fn validate(&self) -> Result<(), Error> {
         if self.args.first().is_none_or(String::is_empty) {
             return Err(Error::InvalidInput("empty executable".into()));
@@ -67,8 +66,40 @@ impl Command {
         {
             valid(value)?;
         }
+        for entry in &self.env {
+            environment_entry(entry)?;
+        }
         Ok(())
     }
+    fn into_exec(self) -> Result<ExecCommand, Error> {
+        self.validate()?;
+        let mut args = self.args;
+        if let Some(directory) = self.working_dir {
+            // Testcontainers has no per-exec working-directory option. Never
+            // interpolate caller data into this script: cwd and argv are positional.
+            let mut wrapped = vec![
+                "sh".into(),
+                "-c".into(),
+                "cd -- \"$1\" && shift && exec \"$@\"".into(),
+                "cli-e2e".into(),
+                directory,
+            ];
+            wrapped.append(&mut args);
+            args = wrapped;
+        }
+        let env = self
+            .env
+            .iter()
+            .map(|entry| environment_entry(entry))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ExecCommand::new(args).with_env_vars(env))
+    }
+}
+fn environment_entry(entry: &str) -> Result<(&str, &str), Error> {
+    entry
+        .split_once('=')
+        .filter(|(key, _)| !key.is_empty())
+        .ok_or_else(|| Error::InvalidInput("environment entry must be KEY=value".into()))
 }
 /// Successful execution, including application failure exit codes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -77,7 +108,8 @@ pub struct CommandResult {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
 }
-/// Captured bytes on execution failure. No exit code is asserted on errors.
+/// Bytes already drained from Testcontainers before execution failed.
+/// Stdout is drained before stderr, so unread stderr is not guaranteed here.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PartialOutput {
     pub stdout: Vec<u8>,
@@ -87,7 +119,8 @@ pub struct PartialOutput {
 pub enum ExecutionFailure {
     Deadline,
     Cancelled,
-    Docker(bollard::errors::Error),
+    Testcontainers(Box<TestcontainersError>),
+    Io(std::io::Error),
     Protocol(String),
 }
 /// Typed failures retain cleanup failures alongside the original case error.
@@ -95,6 +128,7 @@ pub enum ExecutionFailure {
 pub enum Error {
     InvalidInput(String),
     Unsupported(String),
+    Testcontainers(Box<TestcontainersError>),
     Docker(bollard::errors::Error),
     Execution {
         failure: ExecutionFailure,
@@ -117,25 +151,35 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Archive(e) => Some(e),
-            Self::Cleanup { cause, .. } => Some(cause),
-            Self::Docker(e)
+            Self::Archive(e)
             | Self::Execution {
-                failure: ExecutionFailure::Docker(e),
+                failure: ExecutionFailure::Io(e),
                 ..
             } => Some(e),
+            Self::Cleanup { cause, .. } => Some(cause),
+            Self::Docker(e) => Some(e),
+            Self::Testcontainers(e)
+            | Self::Execution {
+                failure: ExecutionFailure::Testcontainers(e),
+                ..
+            } => Some(e.as_ref()),
             _ => None,
         }
     }
 }
+impl From<TestcontainersError> for Error {
+    fn from(error: TestcontainersError) -> Self {
+        Self::Testcontainers(Box::new(error))
+    }
+}
 impl From<bollard::errors::Error> for Error {
-    fn from(e: bollard::errors::Error) -> Self {
-        Self::Docker(e)
+    fn from(error: bollard::errors::Error) -> Self {
+        Self::Docker(error)
     }
 }
 impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Self {
-        Self::Archive(e)
+    fn from(error: std::io::Error) -> Self {
+        Self::Archive(error)
     }
 }
 fn valid(value: &str) -> Result<(), Error> {
@@ -190,10 +234,11 @@ impl<E: std::error::Error + 'static> std::error::Error for ScopeError<E> {
         }
     }
 }
-/// Case-scoped operations, with private transport and absolute deadline.
+/// Case-scoped operations. Weak handles cannot extend the container's lifetime.
 #[derive(Clone)]
 pub struct Environment {
-    docker: Docker,
+    container: Weak<RwLock<Option<ContainerAsync<GenericImage>>>>,
+    docker: bollard::Docker,
     id: String,
     deadline: Instant,
     cancel: CancellationToken,
@@ -204,62 +249,33 @@ impl Environment {
     pub fn container_id(&self) -> &str {
         &self.id
     }
-    async fn bounded<T>(&self, fut: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
-        tokio::select! { biased; () = self.cancel.cancelled() => Err(Error::Cancelled),
-        result = timeout_at(self.deadline, fut) => result.map_err(|_| Error::Deadline)? }
+    fn owner(&self) -> Result<Container, Error> {
+        self.container.upgrade().ok_or(Error::Cancelled)
     }
-    /// Execute argv and retain bytes on transport, cancellation or deadline failure.
+    async fn bounded<T>(&self, future: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
+        bounded(self.deadline, &self.cancel, future).await
+    }
+    /// Execute argv through Testcontainers and return status and separate streams.
     ///
     /// # Errors
-    /// Returns an input error for invalid argv and an execution error with partial
-    /// output for Docker, protocol, cancellation, or deadline failures.
+    /// Returns an input error for invalid argv and an execution error with bytes
+    /// already drained on transport failure, cancellation, or deadline expiry.
     pub async fn run(&self, command: Command) -> Result<CommandResult, Error> {
-        command.validate()?;
+        let command = command.into_exec()?;
         let mut output = PartialOutput::default();
         let result = self
             .bounded(async {
-                let exec = self
-                    .docker
-                    .create_exec(
-                        &self.id,
-                        ExecConfig {
-                            attach_stdout: Some(true),
-                            attach_stderr: Some(true),
-                            tty: Some(false),
-                            cmd: Some(command.args),
-                            working_dir: command.working_dir,
-                            env: Some(command.env),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-                match self.docker.start_exec(&exec.id, None).await? {
-                    StartExecResults::Attached {
-                        output: mut stream,
-                        input,
-                    } => {
-                        drop(input);
-                        while let Some(chunk) = stream.next().await {
-                            append_output(&mut output, chunk?)?;
-                        }
-                    }
-                    StartExecResults::Detached => {
-                        return Err(Error::Unsupported("detached exec response".into()));
-                    }
-                }
+                let owner = self.owner()?;
+                let guard = owner.read().await;
+                let container = guard.as_ref().ok_or(Error::Cancelled)?;
+                let mut exec = container.exec(command).await?;
+                exec.stdout().read_to_end(&mut output.stdout).await?;
+                exec.stderr().read_to_end(&mut output.stderr).await?;
                 loop {
-                    let state = self.docker.inspect_exec(&exec.id).await?;
-                    match state.running {
-                        Some(false) => {
-                            break state.exit_code.ok_or_else(|| {
-                                Error::Unsupported("missing exec exit code".into())
-                            });
-                        }
-                        Some(true) => tokio::time::sleep(Duration::from_millis(10)).await,
-                        None => {
-                            return Err(Error::Unsupported("missing exec running state".into()));
-                        }
+                    if let Some(code) = exec.exit_code().await? {
+                        break Ok(code);
                     }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             })
             .await;
@@ -273,8 +289,9 @@ impl Environment {
                 failure: match error {
                     Error::Deadline => ExecutionFailure::Deadline,
                     Error::Cancelled => ExecutionFailure::Cancelled,
-                    Error::Docker(e) => ExecutionFailure::Docker(e),
-                    e => ExecutionFailure::Protocol(e.to_string()),
+                    Error::Testcontainers(error) => ExecutionFailure::Testcontainers(error),
+                    Error::Archive(error) => ExecutionFailure::Io(error),
+                    error => ExecutionFailure::Protocol(error.to_string()),
                 },
                 output,
             }),
@@ -294,8 +311,8 @@ impl Environment {
     /// Copy exact bytes into a regular file with mode `0644`.
     ///
     /// # Errors
-    /// Returns errors for invalid paths, archive construction, Docker transport,
-    /// cancellation, or deadline expiry. The parent directory must already exist.
+    /// Returns input, archive, upload, cancellation, or deadline errors.
+    /// The parent directory must already exist.
     pub async fn write_file(&self, path: &str, bytes: &[u8]) -> Result<(), Error> {
         path_valid(path)?;
         let path = Path::new(path);
@@ -308,6 +325,11 @@ impl Environment {
             .unwrap_or(Path::new("."));
         let archive = file_archive(name, bytes)?;
         self.bounded(async {
+            let owner = self.owner()?;
+            let guard = owner.read().await;
+            let _container = guard.as_ref().ok_or(Error::Cancelled)?;
+            // Testcontainers only supports copy-to before startup. Use its public
+            // configured SDK client for this missing operation, not a second backend.
             self.docker
                 .upload_to_container(
                     &self.id,
@@ -316,34 +338,25 @@ impl Environment {
                             .path(&parent.to_string_lossy())
                             .build(),
                     ),
-                    bollard::body_full(bytes::Bytes::from(archive)),
+                    bollard::body_full(archive.into()),
                 )
                 .await?;
             Ok(())
         })
         .await
     }
-    /// Read exact bytes from a single regular-file Docker archive entry.
+    /// Read bytes through Testcontainers' single-file copy API.
     ///
     /// # Errors
-    /// Returns errors for invalid paths or archives, Docker transport, cancellation,
-    /// or deadline expiry.
+    /// Returns input, native copy, cancellation, or deadline errors.
+    /// Archive validation and symbolic-link behavior are owned by Testcontainers.
     pub async fn read_file(&self, path: &str) -> Result<Vec<u8>, Error> {
         path_valid(path)?;
         self.bounded(async {
-            let mut stream = self.docker.download_from_container(
-                &self.id,
-                Some(
-                    DownloadFromContainerOptionsBuilder::default()
-                        .path(path)
-                        .build(),
-                ),
-            );
-            let mut bytes = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                bytes.extend_from_slice(&chunk?);
-            }
-            read_archive(&bytes)
+            let owner = self.owner()?;
+            let guard = owner.read().await;
+            let container = guard.as_ref().ok_or(Error::Cancelled)?;
+            Ok(container.copy_file_from(path, Vec::new()).await?)
         })
         .await
     }
@@ -425,14 +438,6 @@ impl Environment {
         .await
     }
 }
-fn append_output(output: &mut PartialOutput, chunk: LogOutput) -> Result<(), Error> {
-    match chunk {
-        LogOutput::StdOut { message } => output.stdout.extend_from_slice(&message),
-        LogOutput::StdErr { message } => output.stderr.extend_from_slice(&message),
-        _ => return Err(Error::Unsupported("unexpected exec stream channel".into())),
-    }
-    Ok(())
-}
 fn compare_command(actual: &CommandResult, expected: &CommandResult) -> Result<(), Error> {
     if actual == expected {
         Ok(())
@@ -451,164 +456,14 @@ fn file_archive(name: &std::ffi::OsStr, bytes: &[u8]) -> Result<Vec<u8>, Error> 
     archive.append_data(&mut header, Path::new(name), bytes)?;
     Ok(archive.into_inner()?)
 }
-fn read_archive(bytes: &[u8]) -> Result<Vec<u8>, Error> {
-    let mut archive = tar::Archive::new(bytes);
-    let mut entries = archive.entries()?;
-    let mut entry = entries
-        .next()
-        .ok_or_else(|| Error::Assertion("empty archive".into()))??;
-    if !entry.header().entry_type().is_file() {
-        return Err(Error::Assertion(
-            "archive entry is not a regular file".into(),
-        ));
-    }
-    let mut result = Vec::new();
-    entry.read_to_end(&mut result)?;
-    drop(entry);
-    if entries.next().is_some() {
-        return Err(Error::Assertion("archive contains multiple entries".into()));
-    }
-    Ok(result)
-}
-
-async fn connect() -> Result<Docker, Error> {
-    if std::env::var_os("DOCKER_API_VERSION").is_some() {
-        return Err(Error::Unsupported(
-            "DOCKER_API_VERSION is not supported; unset it to negotiate".into(),
-        ));
-    }
-    if std::env::var("DOCKER_TLS_VERIFY").is_ok_and(|v| !v.is_empty() && v != "0")
-        || std::env::var_os("DOCKER_CERT_PATH").is_some()
-    {
-        return Err(Error::Unsupported(
-            "TLS Docker endpoints are not supported".into(),
-        ));
-    }
-    let host =
-        std::env::var("DOCKER_HOST").unwrap_or_else(|_| "unix:///var/run/docker.sock".into());
-    valid(&host)?;
-    let docker = if let Some(path) = host.strip_prefix("unix://") {
-        Docker::connect_with_unix(path, 60, API_DEFAULT_VERSION)?
-    } else if host.starts_with("http://") || host.starts_with("tcp://") {
-        Docker::connect_with_http(&host, 60, API_DEFAULT_VERSION)?
-    } else {
-        return Err(Error::Unsupported(format!(
-            "unsupported Docker endpoint {host:?}"
-        )));
-    };
-    Ok(docker.negotiate_version().await?)
-}
-struct Resource {
-    docker: Docker,
-    name: String,
-    owner: String,
-    creation: AtomicU8,
-}
-impl Resource {
-    fn new(docker: Docker, owner: &str) -> Self {
-        Self {
-            docker,
-            name: format!("cli-e2e-rust-{}", uuid::Uuid::new_v4()),
-            owner: owner.into(),
-            creation: AtomicU8::new(0),
-        }
-    }
-    async fn create(&self, image: &str) -> Result<String, Error> {
-        let body = ContainerCreateBody {
-            image: Some(image.into()),
-            labels: Some(HashMap::from([(LABEL.into(), self.owner.clone())])),
-            ..Default::default()
-        };
-        self.creation.store(1, Ordering::SeqCst);
-        let result = self
-            .docker
-            .create_container(
-                Some(
-                    CreateContainerOptionsBuilder::default()
-                        .name(&self.name)
-                        .build(),
-                ),
-                body,
-            )
-            .await;
-        if result.is_ok()
-            || matches!(
-                result,
-                Err(bollard::errors::Error::DockerResponseServerError {
-                    status_code: 400..=499,
-                    ..
-                })
-            )
-        {
-            self.creation.store(2, Ordering::SeqCst);
-        }
-        Ok(result?.id)
-    }
-    async fn cleanup(&self) -> Result<(), Error> {
-        let deadline = Instant::now() + CLEANUP_BUDGET;
-        if self.creation.load(Ordering::SeqCst) == 0 {
-            return Ok(());
-        }
-        let mut last_error = None;
-        let cleanup = async {
-            loop {
-                match self.docker.inspect_container(&self.name, None).await {
-                    Err(bollard::errors::Error::DockerResponseServerError {
-                        status_code: 404,
-                        ..
-                    }) if self.creation.load(Ordering::SeqCst) == 2 => return Ok(()),
-                    Err(e) => {
-                        last_error = Some(Error::Docker(e));
-                    }
-                    Ok(info) => {
-                        if info
-                            .config
-                            .and_then(|c| c.labels)
-                            .and_then(|l| l.get(LABEL).cloned())
-                            .as_deref()
-                            != Some(&self.owner)
-                        {
-                            return Err(Error::Unsupported(
-                                "refusing cleanup of foreign resource".into(),
-                            ));
-                        }
-                        let id = info.id.ok_or_else(|| {
-                            Error::Unsupported("cleanup inspect missing container ID".into())
-                        })?;
-                        match self
-                            .docker
-                            .remove_container(
-                                &id,
-                                Some(
-                                    RemoveContainerOptionsBuilder::default()
-                                        .force(true)
-                                        .v(true)
-                                        .build(),
-                                ),
-                            )
-                            .await
-                        {
-                            Ok(())
-                            | Err(bollard::errors::Error::DockerResponseServerError {
-                                status_code: 404,
-                                ..
-                            }) => return Ok(()),
-                            Err(e) => {
-                                last_error = Some(Error::Docker(e));
-                            }
-                        }
-                    }
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        };
-        timeout_at(deadline, cleanup)
-            .await
-            .unwrap_or_else(|_| Err(last_error.unwrap_or(Error::Deadline)))
-            .map_err(|cause| Error::Cleanup {
-                resource: self.name.clone(),
-                cause: Box::new(cause),
-            })
+async fn bounded<T>(
+    deadline: Instant,
+    cancel: &CancellationToken,
+    future: impl Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
+    tokio::select! { biased;
+        () = cancel.cancelled() => Err(Error::Cancelled),
+        result = timeout_at(deadline, future) => result.map_err(|_| Error::Deadline)?,
     }
 }
 struct CancelOnDrop(CancellationToken);
@@ -617,149 +472,95 @@ impl Drop for CancelOnDrop {
         self.0.cancel();
     }
 }
-/// Run one caller callback in a fresh container leased from a local image.
-/// Native test runners control case names and concurrency. Dropping this future
-/// cancels its supervised task, which retains ownership through bounded cleanup.
-/// Keep the Tokio runtime alive until that background cleanup finishes.
+/// Run a native async callback in a fresh Testcontainers-managed container.
+/// The image must already exist. Testcontainers owns startup, removal, Drop,
+/// watchdog recovery, and Docker endpoint configuration.
+/// No `Send` or `'static` bound is required, including for native file reads.
 ///
 /// # Errors
-/// Returns typed infrastructure, callback, and cleanup failures without erasing
-/// the callback's error type.
+/// Returns typed infrastructure, callback, and explicit removal failures.
+/// Testcontainers' Drop fallback logs failures rather than returning them.
 ///
 /// # Panics
-/// Callback panics are resumed with their original payload after cleanup.
-/// Cleanup failures during a panic are written to stderr before resuming it.
+/// Resumes the original callback panic after explicit cleanup. Removal failures
+/// during unwinding are reported to stderr without replacing the panic payload.
 pub async fn with_environment<F, Fut, T, E>(image: &str, callback: F) -> Result<T, ScopeError<E>>
 where
-    F: FnOnce(Environment) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<T, E>> + Send + 'static,
-    T: Send + 'static,
-    E: Send + 'static,
+    F: FnOnce(Environment) -> Fut,
+    Fut: Future<Output = Result<T, E>>,
 {
-    let deadline = Instant::now() + CASE_BUDGET;
     valid(image).map_err(ScopeError::Infrastructure)?;
     if image.is_empty() {
         return Err(ScopeError::Infrastructure(Error::InvalidInput(
             "empty image".into(),
         )));
     }
+    let deadline = Instant::now() + CASE_BUDGET;
     let cancel = CancellationToken::new();
-    let image = image.to_string();
-    let scope_cancel = cancel.clone();
-    owned_scope(
-        async move { supervise(image, callback, scope_cancel, deadline).await },
-        cancel,
-    )
-    .await
-}
-async fn owned_scope<T: Send + 'static, E: Send + 'static>(
-    future: impl Future<Output = Outcome<T, E>> + Send + 'static,
-    cancel: CancellationToken,
-) -> Result<T, ScopeError<E>> {
-    let _guard = CancelOnDrop(cancel);
-    let task = tokio::spawn(future);
-    match task.await {
-        Ok(outcome) => finish(outcome),
-        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-        Err(_) => Err(ScopeError::Infrastructure(Error::Cancelled)),
-    }
-}
-type PanicPayload = Box<dyn std::any::Any + Send>;
-type Outcome<T, E> = Result<Result<T, ScopeError<E>>, PanicPayload>;
-fn finish<T, E>(outcome: Outcome<T, E>) -> Result<T, ScopeError<E>> {
-    match outcome {
-        Ok(result) => result,
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
-}
-async fn setup<T>(
-    cancel: &CancellationToken,
-    deadline: Instant,
-    future: impl Future<Output = Result<T, Error>>,
-) -> Result<T, Error> {
-    tokio::select! { biased; () = cancel.cancelled() => Err(Error::Cancelled), result = timeout_at(deadline, future) => result.map_err(|_| Error::Deadline)? }
-}
-async fn supervise<F, Fut, T, E>(
-    image: String,
-    callback: F,
-    cancel: CancellationToken,
-    deadline: Instant,
-) -> Outcome<T, E>
-where
-    F: FnOnce(Environment) -> Fut,
-    Fut: Future<Output = Result<T, E>>,
-{
-    let docker = match setup(&cancel, deadline, connect()).await {
-        Ok(docker) => docker,
-        Err(error) => return Ok(Err(ScopeError::Infrastructure(error))),
-    };
-    supervise_with_docker(docker, image, callback, cancel, deadline).await
-}
-async fn supervise_with_docker<F, Fut, T, E>(
-    docker: Docker,
-    image: String,
-    callback: F,
-    cancel: CancellationToken,
-    deadline: Instant,
-) -> Outcome<T, E>
-where
-    F: FnOnce(Environment) -> Fut,
-    Fut: Future<Output = Result<T, E>>,
-{
-    let image = setup(&cancel, deadline, async {
-        docker
-            .inspect_image(&image)
+    let (docker, container) = bounded(deadline, &cancel, async {
+        let docker = docker_client_instance()
+            .await
+            .map_err(TestcontainersError::from)?;
+        let id = docker
+            .inspect_image(image)
             .await?
             .id
-            .ok_or_else(|| Error::Unsupported("image ID absent".into()))
+            .ok_or_else(|| Error::Unsupported("image ID absent".into()))?;
+        let (name, tag) = id
+            .split_once(':')
+            .ok_or_else(|| Error::Unsupported("image ID is not a digest".into()))?;
+        // Passing the immutable ID avoids a tag changing between inspection and
+        // creation. AsyncRunner can still attempt a pull on a create-time 404.
+        let container = GenericImage::new(name, tag).start().await?;
+        Ok((docker, container))
     })
-    .await;
-    let image = match image {
-        Ok(image) => image,
-        Err(error) => return Ok(Err(ScopeError::Infrastructure(error))),
+    .await
+    .map_err(ScopeError::Infrastructure)?;
+    let id = container.id().to_string();
+    let container = Arc::new(RwLock::new(Some(container)));
+    let _cancel_on_drop = CancelOnDrop(cancel.clone());
+    let env = Environment {
+        container: Arc::downgrade(&container),
+        docker,
+        id: id.clone(),
+        deadline,
+        cancel: cancel.clone(),
     };
-    let owner = uuid::Uuid::new_v4().to_string();
-    let lease = Resource::new(docker.clone(), &owner);
-    let resource = Resource::new(docker.clone(), &owner);
-    let case_cancel = cancel.child_token();
-    let action = async {
-        setup(&cancel, deadline, lease.create(&image))
-            .await
-            .map_err(ScopeError::Infrastructure)?;
-        let env = tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(Error::Cancelled),
-            result = timeout_at(deadline, async {
-                let id = resource.create(&image).await?;
-                docker.start_container(&id, None).await?;
-                Ok(Environment { docker: docker.clone(), id, deadline, cancel: case_cancel.clone() })
-            }) => result.map_err(|_| Error::Deadline).and_then(|result| result),
-        }.map_err(ScopeError::Infrastructure)?;
-        // Do not race a timer against env.run: it must publish its partial output.
-        // The operation budget cannot preempt arbitrary caller code.
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(ScopeError::Infrastructure(Error::Cancelled)),
-            result = async { callback(env).await } => result.map_err(ScopeError::Callback),
-        }
-    };
-    let outcome = AssertUnwindSafe(action).catch_unwind().await;
-    case_cancel.cancel();
-    let mut errors = Vec::new();
-    for result in [resource.cleanup().await, lease.cleanup().await] {
-        if let Err(error) = result {
-            errors.push(error);
-        }
-    }
+    let outcome = AssertUnwindSafe(async { callback(env).await })
+        .catch_unwind()
+        .await;
+    cancel.cancel();
+    let cleanup = cleanup(&container, &id).await;
     match outcome {
         Err(payload) => {
-            if !errors.is_empty() {
-                eprintln!("cli-e2e cleanup failed while unwinding: {errors:?}");
+            if let Err(error) = cleanup {
+                eprintln!("cli-e2e cleanup failed while unwinding: {error}");
             }
-            Err(payload)
+            std::panic::resume_unwind(payload)
         }
-        Ok(result) => Ok(combine_scope(result, errors)),
+        Ok(result) => combine_scope(
+            result.map_err(ScopeError::Callback),
+            cleanup.err().into_iter().collect(),
+        ),
     }
+}
+async fn cleanup(container: &Container, id: &str) -> Result<(), Error> {
+    let action = async {
+        // All public operations race cancellation while holding their read lock.
+        // A cancelled operation releases that lock. Never wait forever on a task
+        // which the caller detached or stopped polling.
+        let mut guard = timeout(CLEANUP_LOCK_BUDGET, container.write())
+            .await
+            .map_err(|_| Error::Deadline)?;
+        if let Some(container) = guard.take() {
+            container.rm().await?;
+        }
+        Ok(())
+    };
+    action.await.map_err(|cause| Error::Cleanup {
+        resource: id.into(),
+        cause: Box::new(cause),
+    })
 }
 fn combine_scope<T, E>(
     result: Result<T, ScopeError<E>>,
@@ -777,6 +578,3 @@ fn combine_scope<T, E>(
 #[cfg(test)]
 #[path = "lib_test.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "transport_test.rs"]
-mod transport_tests;
