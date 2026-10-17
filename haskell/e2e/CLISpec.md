@@ -1,6 +1,6 @@
 # Haskell Docker acceptance scenarios
 
-Source: [Spec.hs](./Spec.hs)
+Source: [CLISpec.hs](./CLISpec.hs)
 
 Each scenario is registered as an ordinary Hspec `it` and invokes `withEnvironment` through the per-example `auditedEnvironment` helper.
 No scenario runs before Hspec selects and executes its example.

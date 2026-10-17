@@ -42,7 +42,8 @@ nix develop "$repo#haskell" -c just build
 ```
 
 This compiles and links the exact `MultipleScenariosSpec.hs` with warnings treated as errors, depending on the exposed local `Test.CLI.E2E` module through Cabal rather than copying library sources.
-It does not execute `main` or contact Docker.
+The sample exports `spec`; its one-line `Spec.hs` entry point uses `hspec-discover` to generate `main` and collect the tests.
+Building does not execute examples or contact Docker.
 Each Hspec `it` invokes `withEnvironment` inside its test body. Hspec name filters select the body before any Docker operation, and assertions retain Hspec's normal reporting.
 Do not include this consumer suite in a native `cabal test all` task: it is intentionally Docker-bearing when executed.
 
@@ -91,7 +92,8 @@ pnpm exec vp test run --config .agents/skills/document-e2e-scenarios/references/
 ```
 
 The Haskell and Rust sample-local Justfiles centralize the long build and acceptance options for each single consumer project.
-Haskell `e2e` runs `cabal test --offline` for `scenario-doc-example:test:scenarios` with direct Hspec reporting and the same root temporary build directory as `build`.
+Haskell `e2e` runs `cabal test` for `scenario-doc-example:test:scenarios` with direct Hspec reporting and the same root temporary build directory as `build`.
+The first build can download the declared `hspec-discover` build tool; offline execution requires that dependency to be cached first.
 Rust `e2e` runs its declared integration test with `--ignored --nocapture`, using the same root target directory as `build`.
 The TypeScript package exposes the same selection through a direct `e2e` task, uncached and dependent on the local library build.
 These commands execute the exact sample files, not copied source or substitute test fixtures. The commands do not build, pull, or delete images.

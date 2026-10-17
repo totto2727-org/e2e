@@ -4,7 +4,7 @@ version: 0.1.0.0
 synopsis: Isolated CLI tests against a local Docker Engine
 description: Run independently named CLI cases in disposable containers using a caller-built local image.
 category: Testing
-extra-source-files: README.md, e2e/Spec.md
+extra-source-files: README.md, e2e/CLISpec.md
 build-type: Simple
 
 common settings
@@ -34,7 +34,8 @@ test-suite native
   type: exitcode-stdio-1.0
   hs-source-dirs: test, src
   main-is: Spec.hs
-  other-modules: Fixture, Test.CLI.E2E, Test.CLI.E2E.Internal
+  other-modules: NativeSpec, Fixture, Test.CLI.E2E, Test.CLI.E2E.Internal
+  build-tool-depends: hspec-discover:hspec-discover >=2.10 && <2.12
   build-depends: hspec >=2.10 && <2.12
   ghc-options: -threaded
 
@@ -43,7 +44,8 @@ test-suite docker-e2e
   type: exitcode-stdio-1.0
   hs-source-dirs: e2e, src
   main-is: Spec.hs
-  other-modules: Test.CLI.E2E, Test.CLI.E2E.Internal
+  other-modules: CLISpec, Test.CLI.E2E, Test.CLI.E2E.Internal
+  build-tool-depends: hspec-discover:hspec-discover >=2.10 && <2.12
   build-depends: hspec >=2.10 && <2.12
   ghc-options: -threaded
   if !flag(docker-e2e)

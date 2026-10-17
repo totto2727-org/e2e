@@ -12,17 +12,31 @@ The library inspects the local image and does not build, pull, or remove images.
 
 ```haskell
 {-# LANGUAGE OverloadedStrings #-}
+module GreetingSpec (spec) where
+
 import Test.Hspec
 import Test.CLI.E2E
 
-main :: IO ()
-main = hspec $ do
+spec :: Spec
+spec = do
   it "greeting" $
     withEnvironment "e2e-example:local" $ \environment ->
       checkCommand environment
         (Command ["echo", "hello from e2e"] Nothing [])
         (Result 0 "hello from e2e\n" "")
 ```
+
+Save the example as `GreetingSpec.hs` in the test source directory.
+Use this one-line `Spec.hs` as the suite entry point:
+
+```haskell
+{-# OPTIONS_GHC -F -pgmF hspec-discover #-}
+```
+
+In the Cabal test suite, set `main-is: Spec.hs`, list `GreetingSpec` in `other-modules`, and add `build-tool-depends: hspec-discover:hspec-discover >=2.10 && <2.12`.
+[`hspec-discover`](https://hspec.github.io/hspec-discover.html) generates the entry point and collects the `spec` exported by each `*Spec.hs` module.
+Test modules do not define `main`, and the library does not register tests.
+This repository uses that structure for the native suite, Docker suite, and equivalent consumer sample.
 
 Each standard Hspec `it` invokes `withEnvironment` only when the framework selects and executes it.
 Hspec owns example names, filtering, reporting, fail-fast behavior, and scheduling.
@@ -151,10 +165,13 @@ There is no Haskell workspace template to align with; this package retains idiom
 The local tasks use explicit Cabal suite targets, with build outputs under `haskell/tmp/cabal/`.
 For standalone Haskell work without the JavaScript task runner, `nix develop .#haskell -c just --justfile haskell/Justfile ci` runs the same native checks.
 The root Nix shell supplies pinned GHC, Cabal, and installed compatible packages.
+The standard `build-tool-depends` declaration lets Cabal resolve the `hspec-discover` executable separately from Nix's installed libraries.
+The first test build can download that tool from Hackage, so the task recipes do not force offline mode.
+Use Cabal's `--offline` option only after the required tool source and build dependencies are cached.
 The package's published dependency bounds do not require `allow-newer`.
 
 Consumers can add this directory as a local Cabal package.
-For example, run `cabal build --offline --builddir=tmp/cabal lib:cli-e2e` from `haskell/` within the Nix shell.
+For example, run `cabal build --builddir=tmp/cabal lib:cli-e2e` from `haskell/` within the Nix shell.
 Normal `cabal test native` does not require Docker.
 The `docker-e2e` suite is disabled unless `-fdocker-e2e` is supplied explicitly.
 The task commands select `test:native` or `-fdocker-e2e test:docker-e2e` before execution.
@@ -167,5 +184,5 @@ pnpm exec vp run @totto2727/e2e-haskell#e2e
 ```
 
 This task does not build or pull an image.
-It runs the [six common acceptance scenarios](e2e/Spec.md) as direct Hspec examples, checking each example's fresh container identity, removed case and lease containers, and unchanged image ID.
+It runs the [six common acceptance scenarios](e2e/CLISpec.md) as direct Hspec examples, checking each example's fresh container identity, removed case and lease containers, and unchanged image ID.
 The native suite is transport evidence, not Docker acceptance.

@@ -1,12 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Main (main) where
+module MultipleScenariosSpec (spec) where
 
 import Test.CLI.E2E (Command (..), Environment, Result (..), checkCommand, withEnvironment)
-import Test.Hspec (hspec, it)
+import Test.Hspec (Spec, it)
 
-main :: IO ()
-main = hspec $ do
+spec :: Spec
+spec = do
   it "prints greeting" $
     withEnvironment "example-cli:local" printsGreetingScenario
   it "returns expected failure" $

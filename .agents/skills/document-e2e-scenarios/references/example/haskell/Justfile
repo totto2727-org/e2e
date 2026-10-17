@@ -2,8 +2,8 @@ default:
     @just --list
 
 build:
-    cabal build --offline --builddir=../../../../../../tmp/scenario-doc-examples/haskell scenario-doc-example:test:scenarios
+    cabal build --builddir=../../../../../../tmp/scenario-doc-examples/haskell scenario-doc-example:test:scenarios
 
 # Explicit Docker acceptance against the caller-built example-cli:local image.
 e2e:
-    cabal test --offline --builddir=../../../../../../tmp/scenario-doc-examples/haskell scenario-doc-example:test:scenarios --test-show-details=direct
+    cabal test --builddir=../../../../../../tmp/scenario-doc-examples/haskell scenario-doc-example:test:scenarios --test-show-details=direct
