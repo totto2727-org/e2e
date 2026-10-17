@@ -1,4 +1,4 @@
-# e2e
+# Caseyard
 
 Small libraries for CLI end-to-end tests in disposable Linux containers.
 Use your language's standard test framework to define cases and call a scoped environment helper inside each test.

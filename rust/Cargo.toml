@@ -1,10 +1,12 @@
 [package]
-name = "e2e"
+name = "caseyard"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Small async Docker-backed CLI end-to-end test library"
-publish = false
+publish = ["crates-io"]
+readme = "README.md"
+repository = "https://github.com/totto2727-org/e2e"
 
 [lints.rust]
 unsafe_code = "forbid"

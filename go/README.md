@@ -1,4 +1,4 @@
-# Go CLI E2E
+# Caseyard for Go
 
 Write CLI E2E tests with Go's `testing` package and a container for each test.
 For common image requirements and lifecycle behavior, see the [shared contract](../README.md).

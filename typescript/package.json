@@ -1,8 +1,12 @@
 {
-  "name": "@totto2727/e2e",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@totto2727/caseyard",
+  "version": "0.1.0",
   "description": "Isolated Linux-container CLI E2E helpers",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/totto2727-org/e2e.git",
+    "directory": "typescript"
+  },
   "files": [
     "dist",
     "README.md"
@@ -13,6 +17,10 @@
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
     }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "dependencies": {
     "tar-stream": "^3.2.2",

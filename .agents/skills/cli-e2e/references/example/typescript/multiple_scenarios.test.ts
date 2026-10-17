@@ -1,4 +1,4 @@
-import { withEnvironment } from '@totto2727/e2e'
+import { withEnvironment } from '@totto2727/caseyard'
 import { test } from 'vitest'
 
 test.concurrent('prints greeting', async (context) => {

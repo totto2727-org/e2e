@@ -1,5 +1,5 @@
 cabal-version: 3.0
-name: e2e
+name: caseyard
 version: 0.1.0.0
 synopsis: Isolated CLI tests against a local Docker Engine
 description: Run independently named CLI cases in disposable containers using a caller-built local image.

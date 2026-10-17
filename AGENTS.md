@@ -1,4 +1,4 @@
-# e2e maintenance
+# Caseyard maintenance
 
 These instructions apply when changing this repository.
 For installation, public API behavior, and consumer requirements, use the [root README](./README.md) and its language guides.
@@ -105,7 +105,7 @@ vp run e2e
 `ci` checks and builds all implementations and runs native tests.
 It does not execute Docker tests or build documentation examples.
 `e2e` builds `fixtures/cli` with the `e2e-example:local` tag, then runs the four language suites sequentially.
-Use `vp run @totto2727/e2e-go#ci` or the corresponding Haskell, TypeScript, or Rust package name to select one graph.
+Use `vp run @totto2727/caseyard-go#ci` or the corresponding Haskell, TypeScript, or Rust package name to select one graph.
 Standalone language Docker commands require the prebuilt fixture image.
 
 | Working directory | Native selection                                                        | Docker selection                                                         |
@@ -177,6 +177,22 @@ Use the template's TypeScript presets without enumerating configuration files in
 `just ci` in `rust/` runs rustfmt, Clippy with denied warnings, builds, native tests, and rustdoc.
 Retain locked dependencies, the existing Rust 1.88 minimum, and template lint policies, including forbidden unsafe code and denied unwrap/expect use.
 Keep Docker tests ignored by default.
+
+## Publishing
+
+The [publish workflow](./.github/workflows/publish.yml) runs for `v*` tags.
+The tag must match both `typescript/package.json` and `rust/Cargo.toml`, for example `v0.1.0`.
+It checks both packages and verifies the crate archive before calling the shared npm and crates.io publish actions.
+
+| Registry  | Package               | Required configuration                                                                 |
+| --------- | --------------------- | -------------------------------------------------------------------------------------- |
+| npm       | `@totto2727/caseyard` | Package ownership and trusted publishing for this repository's `publish.yml` workflow. |
+| crates.io | `caseyard`            | Crate ownership and the `CARGO_REGISTRY_TOKEN` repository secret.                      |
+
+Confirm registry name availability and complete any first-publication setup before pushing a release tag.
+No license has been selected for this repository; resolve the distribution terms before the first publication.
+Do not create or push release tags during dry-run validation.
+The private workspace packages are orchestration wrappers, not publication targets.
 
 ## Template basis and task-specific guides
 

@@ -1,4 +1,4 @@
-use e2e::{Command, CommandResult, Error, ExecutionFailure, ScopeError, with_environment};
+use caseyard::{Command, CommandResult, Error, ExecutionFailure, ScopeError, with_environment};
 use std::time::{Duration, Instant};
 
 const IMAGE: &str = "e2e-example:local";

@@ -1,5 +1,5 @@
 packages: .
 test-show-details: direct
 
-package e2e
+package caseyard
   ghc-options: -Werror

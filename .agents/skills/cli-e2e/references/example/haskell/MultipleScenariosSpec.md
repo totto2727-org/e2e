@@ -23,6 +23,7 @@ Verify that the local CLI image prints the exact caller-visible greeting success
 ### Preconditions and fixtures
 
 - The caller has built `example-cli:local` with `echo`, `false`, and a default entrypoint that keeps the container running.
+- The consumer test suite depends on the published `caseyard` package from Hackage and imports `Test.CLI.E2E`.
 - The Hspec `it "prints greeting"` body calls `withEnvironment`, creating a fresh container and a private stopped image lease only when that example executes.
 
 ### Execution flow

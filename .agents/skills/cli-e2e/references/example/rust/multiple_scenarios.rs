@@ -1,4 +1,4 @@
-use e2e::{Command, CommandResult, Error, ScopeError, with_environment};
+use caseyard::{Command, CommandResult, Error, ScopeError, with_environment};
 
 #[tokio::test]
 #[ignore = "requires caller-built example-cli:local and a Linux-container Docker Engine"]

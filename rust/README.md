@@ -1,4 +1,4 @@
-# Rust CLI E2E library
+# Caseyard for Rust
 
 For library users who know Tokio tests.
 See [shared prerequisites](../README.md#prerequisites-and-setup), [values](../README.md#shared-values), and [operations](../README.md#shared-operations).
@@ -18,14 +18,14 @@ Consumer `Cargo.toml`, after publication:
 
 ```toml
 [dev-dependencies]
-e2e = "0.1"
+caseyard = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
 ## Public API
 
 ```rust,no_run
-use e2e::{with_environment, Command, CommandResult, Error, ScopeError};
+use caseyard::{with_environment, Command, CommandResult, Error, ScopeError};
 
 #[tokio::test]
 #[ignore = "requires caller-built e2e-example:local and Docker"]

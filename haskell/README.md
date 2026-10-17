@@ -1,4 +1,4 @@
-# Haskell CLI E2E
+# Caseyard for Haskell
 
 For library users who know `IO` and Hspec.
 See [shared prerequisites](../README.md#prerequisites-and-setup), [values](../README.md#shared-values), and [operations](../README.md#shared-operations).
@@ -6,7 +6,7 @@ See [shared prerequisites](../README.md#prerequisites-and-setup), [values](../RE
 ## Setup
 
 > [!IMPORTANT]
-> The Hackage setup below requires publication of `e2e` at a matching version.
+> The Hackage setup below requires publication of `caseyard` at a matching version.
 > Registry availability is not verified.
 
 Consumer `cabal.project`:
@@ -26,7 +26,7 @@ test-suite greeting
   default-language: Haskell2010
   build-depends:
     base >=4.18 && <5,
-    e2e >=0.1.0.0 && <0.2,
+    caseyard >=0.1.0.0 && <0.2,
     hspec >=2.10 && <2.12
   build-tool-depends:
     hspec-discover:hspec-discover >=2.10 && <2.12
