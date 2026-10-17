@@ -1,32 +1,29 @@
 # Go CLI E2E
 
-Reusable Go helpers for non-interactive CLI end-to-end tests in isolated Testcontainers containers.
-This reference is for Go developers who use the package to write consumer tests.
-See the [shared language-independent contract](../README.md) for the common behavior.
-
-## Prerequisites
-
-- Go 1.25 or newer.
-- A running Docker daemon reachable by Testcontainers.
-- A caller-built local image containing the CLI under test.
+Write CLI E2E tests with Go's `testing` package and a container for each test.
+For common image requirements and lifecycle behavior, see the [shared contract](../README.md).
 
 ## Setup
 
-Add the module to your consumer project:
+| Requirement       | Value                                                         |
+| ----------------- | ------------------------------------------------------------- |
+| Go                | 1.25 or newer                                                 |
+| Docker connection | A daemon accessible through Testcontainers configuration      |
+| Application image | A local image with the CLI under test, built before the tests |
+
+Add the module to your test project:
 
 ```sh
 go get github.com/totto2727-org/e2e/go@v0.0.0-20261017065452-5b5def6e7ca1
 ```
 
-This pins the API shown below through Go's normal module resolver, without a local `replace` directive.
-The pseudo-version identifies a source revision, not a tagged release.
+The pseudo-version selects a source revision, not a tagged release.
+
+> [!IMPORTANT]
+> Testcontainers can pull its resource-reaper image.
+> The library does not build, pull, or remove your application image.
 
 ## Usage
-
-Build the image before starting the Go test.
-Import `github.com/totto2727-org/e2e/go/cli`.
-The library does not build, pull, or remove the caller's application image.
-Testcontainers may pull its resource-reaper infrastructure image according to its own configuration.
 
 ```go
 package cli_test
@@ -38,7 +35,7 @@ import (
 )
 
 func TestVersion(t *testing.T) {
-	t.Parallel() // Optional: scheduling belongs to the consumer.
+	t.Parallel()
 	environment := cli.NewEnvironment(t, "my-cli-e2e:local")
 	if err := environment.CheckCommand(
 		cli.Command{Args: []string{"my-cli", "--version"}},
@@ -49,53 +46,42 @@ func TestVersion(t *testing.T) {
 }
 ```
 
+For sequential tests, omit `t.Parallel()`.
+For more cases, see the [Go example](../.agents/skills/document-e2e-scenarios/references/example/multiple_scenarios_test.go).
+
 ## API
 
 ### Per-test environment
 
-`cli.NewEnvironment(t, image) *cli.Environment` prepares a fresh container for the calling standard Go test and returns it only after setup succeeds.
-Call it inside each ordinary `Test` function or `t.Run` callback, after `t.Parallel()` when parallel execution is desired.
-Test names, selection, registration, and parallel scheduling belong to Go's test runner and the consumer, not the library.
-Every invocation resolves the caller-built image locally without pulling and creates its own temporary stopped lease container retaining that immutable image ID.
-`t.Cleanup` owns cancellation, execution-client closure, base-client closure, scenario-container removal, and finally lease release, in that order.
-Setup failures fail the calling test only after cleanup has been registered for acquired or partially created resources.
-Cleanup never removes the caller-owned image.
+| API or condition                                | Behavior                                                                                             |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `cli.NewEnvironment(t, image) *cli.Environment` | Creates a fresh environment for the calling test.                                                    |
+| Setup failure                                   | Fails the calling test. Registers cleanup for acquired or partially created resources.               |
+| Test completion                                 | Uses `t.Cleanup` to cancel operations, close clients, and remove the test container and image lease. |
+| Cleanup failure                                 | Reports an error through `t.Error`.                                                                  |
+| Test names, selection, and concurrency          | Remain under Go's test runner. The library does not call `t.Run` or `t.Parallel`.                    |
 
-For complete examples using ordinary Go `Test` functions, see the [Go scenario sample](../.agents/skills/document-e2e-scenarios/references/example/multiple_scenarios_test.go), which creates the environment inside each test function.
+> [!IMPORTANT]
+> For parallel tests, call `NewEnvironment` after `t.Parallel()`.
+> The one-minute operation budget starts at `NewEnvironment`, before image resolution and setup.
 
 ### Commands and results
 
-```go
-type Command struct {
-	Args       []string
-	WorkingDir string
-	Env        []string
-}
+| Field                            | Type       | Meaning                                                                      |
+| -------------------------------- | ---------- | ---------------------------------------------------------------------------- |
+| `Command.Args`                   | `[]string` | Argument vector with a nonempty executable at index zero. No implicit shell. |
+| `Command.WorkingDir`             | `string`   | Optional directory for the command.                                          |
+| `Command.Env`                    | `[]string` | Optional environment entries.                                                |
+| `Result.ExitCode`                | `int`      | Application exit code. Valid only when `Run` returns no error.               |
+| `Result.Stdout`, `Result.Stderr` | `string`   | Separate output streams. Strings preserve bytes without UTF-8 validation.    |
 
-type Result struct {
-	ExitCode int
-	Stdout   string
-	Stderr   string
-}
-```
+| Method                                                     | Result                                                                                              |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `Run(command cli.Command) (cli.Result, error)`             | Executes the command. A nonzero application exit code is not a Go error.                            |
+| `CheckCommand(command cli.Command, want cli.Result) error` | Runs the command and compares all three fields exactly. Returns execution errors before comparison. |
 
-`environment.Run(command)` returns `(cli.Result, error)` using one native split-output execution path.
-`Args` must contain a nonempty executable at index zero.
-NUL bytes in argv entries, `WorkingDir`, or `Env` entries are rejected before runtime execution.
-Arguments are passed as argv entries, not joined or interpreted by a shell.
-Use an explicit shell executable only when the command itself requires shell syntax.
-`WorkingDir` and `Env` optionally set the command directory and environment entries.
-
-Stdout and stderr remain separate, with ordering preserved within each stream, not between streams.
-They are never implicitly concatenated.
-Go strings retain stream bytes without UTF-8 validation.
-A nonzero command exit code is a result, not a Go error.
-On transport or cancellation errors, the returned result retains any captured partial stdout and stderr, but `ExitCode` is not usable when `err != nil`.
-Always check the error before interpreting the exit code.
-
-Go delegates stream demultiplexing to Moby's `StdCopy`.
-That upstream decoder accepts EOF inside an unfinished frame, so malformed-stream detection is not exhaustive.
-Cancellation still returns a context error; the partial result contains bytes already delivered by the decoder.
+NUL bytes in arguments, the directory, or environment entries cause an error before execution.
+An empty expected stream asserts that the command wrote no output to that stream.
 
 ```go
 result, err := environment.Run(cli.Command{
@@ -111,67 +97,40 @@ if result.ExitCode != 0 {
 }
 ```
 
-`environment.CheckCommand(command, want)` runs a `cli.Command` and compares all three fields of the expected `cli.Result` exactly.
-An empty expected `Stderr` intentionally asserts that no diagnostic output was written.
-Execution errors are returned before result comparison.
+### Files and paths
 
-```go
-if err := environment.CheckCommand(
-	cli.Command{Args: []string{"my-cli", "status"}},
-	cli.Result{ExitCode: 0, Stdout: "ready\n", Stderr: ""},
-); err != nil {
-	t.Fatal(err)
-}
-```
+For required image utilities and file-transfer conditions, see [shared prerequisites](../README.md#prerequisites-and-setup).
 
-### Files
+| Method                                           | Expected result                                                              |
+| ------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `WriteFile(path string, content []byte) error`   | Copies exact bytes with mode `0644`. The parent directory must exist.        |
+| `ReadFile(path string) ([]byte, error)`          | Returns exact file bytes.                                                    |
+| `CheckFile(path string, want []byte) error`      | Compares exact file bytes.                                                   |
+| `CheckMissing(path string) error`                | Requires absence, including absence of a dangling symbolic link.             |
+| `CheckRegularFile(path string) error`            | Requires a physical regular file, not a symbolic link.                       |
+| `CheckDirectory(path string) error`              | Requires a physical directory, not a symbolic link.                          |
+| `CheckSymlink(path, literalTarget string) error` | Compares the literal target without normalization. The target can be absent. |
 
-| Method                                         | Behavior                                                                                |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `WriteFile(path string, content []byte) error` | Copy exact bytes to a container file with mode `0644`. The parent directory must exist. |
-| `ReadFile(path string) ([]byte, error)`        | Copy file bytes from the container for custom assertions.                               |
-| `CheckFile(path string, want []byte) error`    | Copy and compare exact file bytes.                                                      |
-
-```go
-if err := environment.WriteFile("/workspace/result.txt", []byte("done\n")); err != nil {
-	t.Fatal(err)
-}
-if err := environment.CheckFile("/workspace/result.txt", []byte("done\n")); err != nil {
-	t.Fatal(err)
-}
-```
-
-### Physical path assertions
-
-The image must provide `test` with `-e`, `-L`, `-f`, and `-d`, plus `readlink` with `--` support.
-All methods return an error if the asserted state does not match or an infrastructure operation fails.
-Unexpected probe exit codes are errors, not successful absence checks.
-
-| Method                              | Expected state                                                                            |
-| ----------------------------------- | ----------------------------------------------------------------------------------------- |
-| `CheckMissing(path)`                | No path exists, including no dangling symbolic link.                                      |
-| `CheckRegularFile(path)`            | A physical regular file, not a symbolic link to one.                                      |
-| `CheckDirectory(path)`              | A physical directory, not a symbolic link to one.                                         |
-| `CheckSymlink(path, literalTarget)` | A symbolic link with exactly the specified literal target, even if that target is absent. |
-
-`CheckSymlink` does not resolve or normalize the target.
-The literal target `result.txt` differs from `/workspace/result.txt`.
+All checks return errors for mismatches or infrastructure failures.
+Path-probe exit codes other than `0` and `1` are errors, not evidence of absence.
 
 ## Execution limits
 
-- The library never calls `t.Run` or `t.Parallel` and imposes no fixed concurrency scheduler.
-- Consumers choose sequential tests or call `t.Parallel()` and configure `go test -parallel`, for example `-parallel=2`.
-- Each invocation receives a one-minute context before image resolution and container setup. Call the helper after `t.Parallel()` so time waiting on Go's runner does not consume this budget.
-- Cancellation closes the command's owned output connection and preserves `context.Canceled` or `context.DeadlineExceeded` for `errors.Is` checks.
-- Closing the connection does not itself stop the process. Return from the test after a deadline error so container cleanup can stop remaining processes.
-- Scenario cleanup uses a fresh 30-second context independent of the case deadline. The image lease has its own 30-second cleanup context.
-- Contexts bound helper operations, not arbitrary Go test code.
-- Initial daemon dialing uses the configured Testcontainers dialer; remote TLS connection establishment follows that dialer's behavior.
+| Condition                       | Behavior or required action                                                                                              |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Output order                    | Preserves order within each stream, not between stdout and stderr.                                                       |
+| Transport or cancellation error | Retains captured output. Do not use `ExitCode` when `err != nil`.                                                        |
+| Cancellation                    | Closes the command connection. Use `errors.Is` with `context.Canceled` or `context.DeadlineExceeded`.                    |
+| Deadline error                  | Return from the test so container cleanup can stop remaining processes. Closing the connection alone does not stop them. |
+| Cleanup                         | Uses a fresh 30-second context for the test container and a separate 30-second context for the image lease.              |
+| Caller code                     | The operation context does not bound arbitrary code in the test.                                                         |
+| Remote TLS connection           | Initial connection establishment follows the configured Testcontainers dialer.                                           |
+| Malformed output                | The Moby decoder can accept EOF inside an incomplete frame. Detection of malformed streams is not exhaustive.            |
 
 ## Development
 
-See [Go maintenance](../AGENTS.md#go) for repository maintenance.
+See [Go maintenance](../AGENTS.md#go).
 
 ## License
 
-No license has been declared for this repository.
+See the [repository license status](../README.md#license).
