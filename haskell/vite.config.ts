@@ -1,21 +1,7 @@
 import { defineConfig } from 'vite-plus'
 
-// Preserve GHCup locations and the Nix wrapper roles that activate native flags.
-const env = [
-  'GHCUP_INSTALL_BASE_PREFIX',
-  'GHCUP_USE_XDG_DIRS',
-  'XDG_DATA_HOME',
-  'XDG_CONFIG_HOME',
-  'XDG_CACHE_HOME',
-  'NIX_CC_WRAPPER_TARGET_HOST_*',
-  'NIX_BINTOOLS_WRAPPER_TARGET_HOST_*',
-  'NIX_PKG_CONFIG_WRAPPER_TARGET_HOST_*',
-  'NIX_CFLAGS_COMPILE',
-  'NIX_LDFLAGS',
-  'PKG_CONFIG_PATH',
-  'SDKROOT',
-  'MACOSX_DEPLOYMENT_TARGET',
-]
+// Cabal's C dependencies use the native search paths supplied by the Nix shell.
+const env = ['NIX_CFLAGS_COMPILE', 'NIX_LDFLAGS', 'PKG_CONFIG_PATH', 'SDKROOT', 'MACOSX_DEPLOYMENT_TARGET']
 // Cabal reads and updates its build state; do not fingerprint it as source input.
 const cache = { env, input: [{ auto: true }, '!dist-newstyle/**'], output: ['dist-newstyle/**'] }
 

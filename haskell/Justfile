@@ -1,32 +1,21 @@
 default:
     @just --list
 
-ghc-version := "9.10.3"
-cabal-version := "3.16.1.0"
-# Bindist GHC must use host tools, not Nix's newer Linux libc.
-# Nix's SDK-only DEVELOPER_DIR hides Apple's compiler tools on macOS.
-ghcup := if os() == "macos" { "env -u DEVELOPER_DIR ghcup" } else { 'env -u CC -u CXX -u LD -u PKG_CONFIG -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR -u NIX_CFLAGS_COMPILE -u NIX_LDFLAGS PATH=/usr/bin:/bin "$(command -v ghcup)"' }
-cabal := ghcup + " run --ghc " + ghc-version + " --cabal " + cabal-version + " -- cabal"
-
-# Install the pinned tools without changing the user's global selections.
-setup:
-    {{ghcup}} run --install --ghc {{ghc-version}} --cabal {{cabal-version}} -- cabal update
-
 # Use the root Nix shell before these recipes.
 check: generate
-    {{cabal}} build -fdocker-e2e lib:caseyard test:native test:docker-e2e
+    cabal build -fdocker-e2e lib:caseyard test:native test:docker-e2e
     # No release maintainer is declared.
-    {{cabal}} check --ignore=no-maintainer
+    cabal check --ignore=no-maintainer
 
 build: generate
-    {{cabal}} build lib:caseyard
+    cabal build lib:caseyard
 
 test: generate
-    {{cabal}} test native
+    cabal test native
 
 # The caller must build e2e-example:local before this explicit task.
 e2e: generate
-    {{cabal}} test -fdocker-e2e docker-e2e
+    cabal test -fdocker-e2e docker-e2e
 
 ci: check build test
 

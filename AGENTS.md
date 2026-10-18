@@ -35,18 +35,16 @@ Do not retain dated verification reports, migration tables, or progress logs in 
 
 Run root tasks from the repository root.
 Enter `nix develop` for repository tools, or select `nix develop .#go`, `.#haskell`, `.#typescript`, or `.#rust` for standalone native work.
-GHCup provides GHC and Cabal. Nix provides hpack and Darwin native dependencies.
-On Linux, install host GCC, pkg-config, GMP and zlib development packages. Haskell tasks use host tools to avoid mixing the GHCup bindist's libc with Nix libc.
+Nix provides GHC, Cabal, hpack, and native build dependencies such as zlib.
 Cabal owns Haskell library dependencies.
 Nix provides `rustup`.
 `rust/rust-toolchain.toml` owns the Rust toolchain and components.
-The default shell includes Node, pnpm, Vite+, Just, Go, Cargo, linters, and formatters.
+The default shell includes Node, pnpm, Vite+, Just, Go, GHC, Cabal, Cargo, linters, and formatters.
 Docker must be available for explicit E2E execution.
 
 ```sh
 nix develop
 vp install --frozen-lockfile
-just --justfile haskell/Justfile setup
 vp run -r ci
 ```
 
@@ -185,8 +183,6 @@ Go's framework controls parallelism through `t.Parallel` and `-parallel`.
 
 ### Haskell
 
-Install [ghcup](https://www.haskell.org/ghcup/install/) and put its `bin` directory on `PATH` before running `just setup` in `haskell/`.
-The Haskell Justfile pins GHC and Cabal and invokes them through `ghcup run` without changing global tool selections.
 Cabal owns package dependencies and hpack generates package metadata.
 Edit `haskell/hpack.yaml` and run `just generate` in `haskell/` to regenerate `caseyard.cabal` with hpack.
 The explicit filename avoids pnpm treating hpack's dependencies as a Node package manifest.

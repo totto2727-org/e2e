@@ -46,10 +46,9 @@
           ];
           rustTools = [ pkgs.rustup ];
           haskellTools = [
+            pkgs.ghc
+            pkgs.cabal-install
             pkgs.haskellPackages.hpack
-          ]
-          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-            pkgs.gmp
             pkgs.zlib
             pkgs.pkg-config
           ];
