@@ -169,7 +169,11 @@ func TestTerminalTermiosRestoration(t *testing.T) {
 	perform(t, terminal, map[string]any{"operation": "send", "data": []int{120}})
 	observed = perform(t, terminal, map[string]any{"operation": "wait"})
 	if !observed.Restored || !reflect.DeepEqual(observed.Initial, observed.Current) {
-		t.Fatal("restored terminal not observed")
+		encoded, err := json.Marshal(observed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("restored terminal not observed: %s stdout=%q terminal=%q", encoded, intsBytes(observed.Stdout), intsBytes(observed.Terminal))
 	}
 }
 func TestSessionReadinessCloseAndWatchdog(t *testing.T) {
