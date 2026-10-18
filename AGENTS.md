@@ -121,7 +121,7 @@ Standalone language Docker commands require the prebuilt fixture image.
 | Working directory | Native selection                                                        | Docker selection                                                         |
 | ----------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | `go/`             | `go test -race ./...`                                                   | `go test -race -tags=e2e ./e2e`                                          |
-| `haskell/`        | `cabal test native`                                                     | `cabal test -fdocker-e2e docker-e2e`                                     |
+| `haskell/`        | `just test`                                                             | `just e2e`                                                               |
 | `typescript/`     | `vp test run --project native`; package imports use `--project package` | `vp test run --project docker`                                           |
 | `rust/`           | `cargo test --locked --all-features`                                    | `cargo test --locked --all-features --test e2e -- --ignored --nocapture` |
 
