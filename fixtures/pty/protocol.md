@@ -59,7 +59,11 @@ Every successful operation except `close` returns an observation:
 
 Status variants are `{"kind":"running"}`, `{"kind":"exited","code":0}`, or `{"kind":"signaled","signal":2}`.
 Termios values are JSON-safe arrays of integers and nested integer arrays.
-PENDIN is excluded as kernel bookkeeping, window size is reported by resize behavior rather than compared as termios.
+PENDIN is excluded as kernel bookkeeping.
+CIBAUD is cleared only when the known standard input and output baud-rate codes are equal, so inherited and explicit equal-speed encodings compare identically.
+Custom BOTHER codes retain their original CIBAUD bits because TCGETS does not resolve their numeric speeds.
+Different baud-rate encodings and other terminal flags remain part of the comparison.
+Window size is reported by resize behavior rather than compared as termios.
 Raw output, including ANSI bytes, remains unchanged.
 `unreadInput` is populated after process exit for finite pipe input.
 A restored termios flag while running is only an observation, not proof of application restoration.

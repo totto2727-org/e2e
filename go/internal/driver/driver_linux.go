@@ -162,6 +162,10 @@ func termSettings(fd int) ([]any, error) {
 	if inputSpeed == 0 {
 		inputSpeed = outputSpeed
 	}
+	// Linux can encode equal standard input speed as inherited or explicit CIBAUD.
+	if inputSpeed == outputSpeed && outputSpeed != unix.BOTHER {
+		value.Cflag &^= unix.CIBAUD
+	}
 	return []any{value.Iflag, value.Oflag, value.Cflag, value.Lflag, inputSpeed, outputSpeed, cc}, nil
 }
 func newTerminal(r request) (_ *terminal, err error) {

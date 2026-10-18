@@ -133,6 +133,8 @@ Send raw bytes, resize the terminal with `SIGWINCH`, or send an external process
 Ctrl-C and Ctrl-D input are bytes, not aliases for an external signal or transport closure.
 
 Observations preserve raw stdout and terminal bytes, process status, and normalized termios state.
+Termios comparison excludes kernel bookkeeping and treats inherited and explicit equal standard input/output baud rates as equivalent.
+Different baud-rate encodings and terminal mode changes remain part of the comparison.
 Normal exit and signal termination are distinct results.
 Screen and cursor restoration assertions remain in the consumer test, using the raw control sequences.
 File checks and snapshots can run between terminal operations while the child is still running.

@@ -116,6 +116,9 @@ func TestWatchdogKillsWhileControlWriteBlocked(t *testing.T) {
 }
 
 func TestDetachedServerLifecycleBoundary(t *testing.T) {
+	// The synthetic server is this race-instrumented test binary, whose default
+	// one-second exit sleep is not part of the production helper lifecycle.
+	t.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	result := start(req(t, map[string]any{"argv": []string{"sh", "-c", "echo $PPID; exec sleep 10"}, "timeout": 3}))
 	if !result.OK {
 		t.Fatalf("start: %#v", result)
