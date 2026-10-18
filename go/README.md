@@ -14,7 +14,7 @@ For common image requirements and lifecycle behavior, see the [shared contract](
 Add the module to your test project:
 
 ```sh
-go get github.com/totto2727-org/e2e/go@33a47d7e3e23aa3e41dc647403e56341a96732b5
+go get github.com/totto2727-org/e2e/go@e35bebf3c83f8a2a7df1fbc626a337543eda80d1
 ```
 
 > [!IMPORTANT]
