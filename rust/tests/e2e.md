@@ -42,6 +42,38 @@ Unsupported kinds and inspection errors are driver failures, not missing paths.
 
 The snapshot API does not recurse or compare metadata.
 
+## `filesystem_snapshot_literal_paths_deletion_and_json_bytes`
+
+### Scope
+
+Verify file deletion, selected paths with spaces, empty regular files, exact JSON bytes, and literal symlink retargeting.
+
+### Commands under test
+
+The static driver captures state, while `ln`, `rm`, and `cat` mutate or inspect fixtures.
+
+### Arguments and options
+
+Select `/workspace/file with spaces`, `/workspace/delete me`, `/workspace/empty`, and `/workspace/link`.
+
+### Preconditions and fixtures
+
+Install the matching driver, write valid pretty-printed JSON, and create a link to the spaced filename.
+
+### Execution flow
+
+1. Verify the empty file baseline, rewrite JSON with the same semantic value but different whitespace and final newline, and delete one regular file.
+2. Change the link target from `file with spaces` to `./file with spaces` and prove it still resolves to the same current file bytes.
+3. Compare snapshots and verify the original baseline remains unchanged.
+
+### Expected results
+
+Sorted differences report `Existence`, `Content`, and `Target`, while the empty regular file remains unchanged.
+
+### Notes
+
+Neither JSON semantics nor equivalent resolved link targets erase literal-byte differences.
+
 ## `terminal_raw_bytes_expect_resize_and_restoration`
 
 ### Scope
@@ -78,6 +110,142 @@ Exit `7` is an observation, and the escaped session handle returns cancellation 
 
 The second byte expectation verifies that the first match retains trailing buffered output.
 
+## `terminal_key_bytes_context_sigint_and_cancel_snapshot`
+
+### Scope
+
+Verify exact input bytes for Up, Down, Space, Enter, Esc, Ctrl-D, and Ctrl-C, literal process context, and an external SIGINT without filesystem changes.
+
+### Commands under test
+
+The first `sh` fixture uses `stty` to enter raw mode and `dd` to copy exactly eleven input bytes to stdout.
+The second prints readiness and replaces itself with `sleep infinity` before the caller sends SIGINT.
+
+### Arguments and options
+
+The input is exactly `ESC [ A ESC [ B SPACE CR ESC 0x04 0x03`.
+Use `/workspace`, `HOME=/workspace/synthetic-home`, literal argv containing spaces, quotes, and an empty string, and `TERM=caseyard-unsupported-terminal` for the raw session.
+The SIGINT session uses `TERM=xterm-256color`.
+
+### Preconditions and fixtures
+
+Install the matching driver, write `/workspace/unchanged` with `[0, 255, 10]`, and capture it with absent `/workspace/not-created` as an explicit snapshot baseline.
+
+### Execution flow
+
+1. Expect readiness in raw mode, send the eleven bytes, and wait for normal exit.
+2. Compare exact stdout context and byte payload, separate terminal output, and restored termios.
+3. Assert the baseline remains unchanged.
+4. Start the second session, expect readiness, send `TerminalSignal::Interrupt`, and wait for signal termination.
+5. Compare cwd, HOME, and TERM output and assert the same snapshot baseline after cancellation.
+
+### Expected results
+
+All eleven bytes are preserved exactly, including Ctrl-D and Ctrl-C, without closing or signaling the raw-mode child.
+The external signal is independently observed as signal `2`, and selected filesystem state remains unchanged after both sessions.
+
+### Notes
+
+An unsupported TERM value is passed through literally.
+This generic transport fixture does not claim that an application implements unsupported-terminal fallback or keyboard navigation semantics.
+
+## `terminal_split_prompt_consumption_and_missing_match_diagnostic`
+
+### Scope
+
+Verify a token split across two input-gated writes, repeated prompt consumption, and bounded missing-match diagnostics.
+
+### Commands under test
+
+A raw-mode shell emits `TO`, waits for one byte, emits `KENprompt`, waits for another byte, and emits a second `prompt`.
+
+### Arguments and options
+
+Use exact `TOKEN` and `prompt` expectations with five-second success budgets and 100-millisecond negative-observation budgets.
+
+### Preconditions and fixtures
+
+Install the matching driver and establish stdout readiness before the first negative observation.
+
+### Execution flow
+
+1. Require the incomplete `TOKEN` expectation to fail with retained `TO` output before sending the first input byte.
+2. Match the complete token and first prompt, then require a second prompt expectation to fail rather than reuse consumed output.
+3. Assert the error identifies terminal bytes and includes complete actual observations, then send the second byte and match the newly emitted prompt.
+
+### Expected results
+
+The final terminal bytes are exactly `TOKENpromptprompt`, stdout is `split-ready`, and the process exits `0`.
+
+### Notes
+
+The input gates force the split token across separate driver reads without assuming ordering between channels.
+
+## `terminal_tiny_recovery_long_output_and_screen_restoration`
+
+### Scope
+
+Verify an observable running no-op in a tiny terminal, geometry recovery, substantial stdout without truncation, and normal screen/cursor restoration.
+
+### Commands under test
+
+`sh`, `stty`, and `dd` implement byte-gated readiness, while `head -c 131072 /dev/zero` produces the long output.
+
+### Arguments and options
+
+Start at one row and eight columns, send Enter, resize to 40 rows and 120 columns, and send Down-arrow bytes.
+
+### Preconditions and fixtures
+
+Capture unchanged and absent file paths before the session.
+
+### Execution flow
+
+1. Expect tiny-terminal readiness, send Enter, and require a running observation with empty stdout and unchanged filesystem snapshot.
+2. Resize, send Down-arrow input, and expect the observed new geometry.
+3. Expect the trailing stdout marker, wait for exit, and compare every output byte and restoration sequence.
+
+### Expected results
+
+Stdout is exactly 131072 zero bytes followed by `trailing-end`.
+Termios matches its initial value, raw terminal output restores cursor visibility and the original screen, and the baseline remains unchanged.
+
+### Notes
+
+This generic fixture verifies SDK transport and observation capabilities, not application-specific list rendering.
+
+## `terminal_cancel_and_interrupt_restore_termios_screen_and_cursor`
+
+### Scope
+
+Verify restoration after an Esc cancellation and after an external process-group SIGINT.
+
+### Commands under test
+
+A raw-mode shell saves termios, enters the alternate screen, hides the cursor, and restores all three observable states before leaving.
+
+### Arguments and options
+
+One session reads an Esc byte, and a second installs an INT trap that restores state and re-raises SIGINT.
+
+### Preconditions and fixtures
+
+Install the matching driver and snapshot one unchanged file plus one absent path.
+
+### Execution flow
+
+1. Expect readiness before sending Esc or SIGINT through their distinct public operations.
+2. Wait for exit and compare exact raw restoration bytes and normalized termios.
+3. Check the same filesystem snapshot after each session.
+
+### Expected results
+
+Esc cancellation returns exit `0`, external SIGINT returns signal `2`, stdout stays empty, and both sessions restore cursor visibility, screen, termios, and selected filesystem state.
+
+### Notes
+
+Restoration is implemented by this consumer fixture and observed by the SDK, not automatically injected by the library.
+
 ## `terminal_pipe_input_unread_bytes_and_signal_are_observable`
 
 ### Scope
@@ -87,7 +255,7 @@ Verify finite pipe stdin, unread input, and an explicit process-group signal ind
 ### Commands under test
 
 One shell prints readiness and exits without reading stdin.
-A second shell prints readiness and replaces itself with `sleep infinity`.
+A `cat` session consumes finite input through EOF, and a final shell prints readiness and replaces itself with `sleep infinity`.
 
 ### Arguments and options
 
@@ -102,12 +270,13 @@ Install the matching driver in a fresh root-image environment.
 
 1. Expect the first child's readiness, reject terminal `send`, and wait for exit.
 2. Check that all supplied pipe bytes remain unread.
-3. Start the second child, expect readiness, send SIGTERM, and wait.
+3. Supply `[0, 255, 10]` to `cat`, require exact stdout, empty terminal output, and no unread bytes after EOF.
+4. Start the final child, expect readiness, send SIGTERM, and wait.
 
 ### Expected results
 
 The first observation has exit `7`, empty stdout, and exact unread bytes `[0, 255, 4]`.
-The second reports `Signaled { signal: 15 }`.
+The final session reports `Signaled { signal: 15 }`.
 
 ### Notes
 
@@ -232,11 +401,13 @@ Build the explicit nonroot image and matching static driver artifacts before thi
 
 1. Install the helper through the same public API used by root-image tests.
 2. Require a nonzero user ID and capture the absent path.
-3. Run the terminal child and wait for exit.
+3. Create a readable file and accessible directory, snapshot them, then remove read/search permissions with mode `000`.
+4. Require explicit driver errors from `snapshot` for the unreadable file and inaccessible child, and from `check_snapshot` against the readable baseline.
+5. Run the terminal child and wait for exit.
 
 ### Expected results
 
-The snapshot reports `Missing`, stdout is exactly `nonroot`, and the application exits `0`.
+The initial snapshot reports `Missing`, permission failures never become missing or unchanged results, stdout is exactly `nonroot`, and the application exits `0`.
 
 ### Notes
 

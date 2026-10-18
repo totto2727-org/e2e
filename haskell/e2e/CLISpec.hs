@@ -2,10 +2,12 @@
 module CLISpec (spec) where
 
 import Prelude hiding (readFile, writeFile)
-import Control.Exception (finally, throwIO)
+import Control.Exception (AsyncException(ThreadKilled), finally, throwIO)
 import Control.Monad (forM_)
 import Data.Aeson hiding (Result)
+import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString as BS
+import Data.List (isInfixOf)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC.Clock (getMonotonicTimeNSec)
@@ -55,24 +57,33 @@ spec = describe "caller-built Docker image" $ do
   it "filesystem snapshots" $ auditedEnvironment $ \e -> do
     capability <- installedDriver e
     writeFile e "/workspace/bytes" (BS.pack [0,255,13,10])
+    writeFile e "/workspace/settings with spaces.json" "{\"selected\":true}\n"
+    writeFile e "/workspace/empty" ""
+    writeFile e "/workspace/deleted" "remove"
     checkCommand e (command ["sh", "-c", "mkdir /workspace/directory; ln -s bytes /workspace/link; ln -s absent /workspace/dangling"])
       (Result 0 "" "")
-    let paths = ["/workspace/missing", "/workspace/link", "/workspace/dangling", "/workspace/directory", "/workspace/bytes"]
+    let paths = ["/workspace/missing", "/workspace/link", "/workspace/dangling", "/workspace/directory", "/workspace/bytes",
+          "/workspace/settings with spaces.json", "/workspace/empty", "/workspace/deleted"]
     before <- captureSnapshot capability paths
     snapshotEntries before `shouldBe` Map.fromList
       [("/workspace/bytes", RegularFile (BS.pack [0,255,13,10])), ("/workspace/directory", Directory),
-       ("/workspace/link", Symlink "bytes"), ("/workspace/dangling", Symlink "absent"), ("/workspace/missing", Missing)]
+       ("/workspace/link", Symlink "bytes"), ("/workspace/dangling", Symlink "absent"), ("/workspace/missing", Missing),
+       ("/workspace/settings with spaces.json", RegularFile "{\"selected\":true}\n"), ("/workspace/empty", RegularFile ""),
+       ("/workspace/deleted", RegularFile "remove")]
     checkSnapshot capability before
     checkCommand e (command ["sh", "-c", "touch /workspace/directory/ignored; chmod 600 /workspace/bytes"])
       (Result 0 "" "")
     captureSnapshot capability paths `shouldReturn` before
     writeFile e "/workspace/bytes" (BS.pack [0,254,13,10])
+    writeFile e "/workspace/settings with spaces.json" "{ \"selected\": true }\n"
+    checkCommand e (command ["rm", "/workspace/deleted"]) (Result 0 "" "")
     checkCommand e (command ["sh", "-c", "rmdir /workspace/missing 2>/dev/null; mkdir /workspace/missing; rm /workspace/link; ln -s ./bytes /workspace/link; rm -r /workspace/directory; ln -s missing /workspace/directory"])
       (Result 0 "" "")
     after <- captureSnapshot capability paths
     map (\difference -> (differencePath difference, differenceChange difference)) (diffSnapshots before after)
-      `shouldBe` [("/workspace/bytes", ContentChanged), ("/workspace/directory", KindChanged),
-                  ("/workspace/link", TargetChanged), ("/workspace/missing", ExistenceChanged)]
+      `shouldBe` [("/workspace/bytes", ContentChanged), ("/workspace/deleted", ExistenceChanged),
+                  ("/workspace/directory", KindChanged), ("/workspace/link", TargetChanged),
+                  ("/workspace/missing", ExistenceChanged), ("/workspace/settings with spaces.json", ContentChanged)]
     checkSnapshot capability before `shouldThrow` assertion
     readFile e "/workspace/bytes" `shouldReturn` BS.pack [0,254,13,10]
 
@@ -88,12 +99,13 @@ spec = describe "caller-built Docker image" $ do
 
   it "terminal raw bytes and restoration" $ auditedEnvironment $ \e -> do
     capability <- installedDriver e
-    let script = "saved=$(stty -g); stty raw -echo; printf '\\033[?25lprompt\\033[0m' >&2; dd bs=1 count=2 of=/workspace/input 2>/dev/null; stty \"$saved\"; printf '\\033[?25h' >&2; printf '%s:%s' \"$PWD\" \"$TOKEN\"; printf '\\000\\377'"
+    let input = "\ESC[A\ESC[B\ESC[C\ESC[D \r\ESC" <> BS.pack [4,3]
+        script = "saved=$(stty -g); stty raw -echo; printf '\\033[?25lprompt\\033[0m' >&2; dd bs=1 count=" ++ show (BS.length input) ++ " of=/workspace/input 2>/dev/null; stty \"$saved\"; printf '\\033[?25h' >&2; printf '%s:%s' \"$PWD\" \"$TOKEN\"; printf '\\000\\377'"
     withTerminal capability (Command ["sh", "-c", script] (Just "/workspace") ["TOKEN=custom"]) defaultTerminalOptions $ \terminal -> do
       ready <- expectTerminal terminal TerminalOutput "\ESC[?25lprompt\ESC[0m" 5
       terminalStatus ready `shouldBe` TerminalRunning
       terminalTermiosRestored ready `shouldBe` False
-      _ <- sendTerminal terminal (BS.pack [3,4])
+      _ <- sendTerminal terminal input
       finished <- waitTerminal terminal 5
       terminalStdout finished `shouldBe` ("/workspace:custom" <> BS.pack [0,255])
       terminalOutput finished `shouldBe` "\ESC[?25lprompt\ESC[0m\ESC[?25h"
@@ -101,7 +113,96 @@ spec = describe "caller-built Docker image" $ do
       terminalStatus finished `shouldBe` TerminalExited 0
       terminalTermiosRestored finished `shouldBe` True
       terminalCurrentTermios finished `shouldBe` terminalInitialTermios finished
-      checkFile e "/workspace/input" (BS.pack [3,4])
+      checkFile e "/workspace/input" input
+
+  forM_ ["xterm-256color", "caseyard-unsupported"] $ \term ->
+    it ("terminal preserves argv cwd HOME and TERM=" ++ term) $ auditedEnvironment $ \e -> do
+      capability <- installedDriver e
+      let invocation = Command ["sh", "-c", "printf '<%s><%s><%s><%s><%s>' \"$1\" \"$2\" \"$PWD\" \"$HOME\" \"$TERM\"", "caseyard", "two words", ""]
+            (Just "/workspace") ["HOME=/workspace/synthetic-home", "TERM=" ++ term]
+      withTerminal capability invocation defaultTerminalOptions $ \terminal -> do
+        finished <- waitTerminal terminal 5
+        terminalStdout finished `shouldBe` B8.pack ("<two words><></workspace></workspace/synthetic-home><" ++ term ++ ">")
+        terminalOutput finished `shouldBe` BS.empty
+        terminalStatus finished `shouldBe` TerminalExited 0
+        terminalTermiosRestored finished `shouldBe` True
+
+  it "terminal external SIGINT reaches the foreground process group" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    let script = "saved=$(stty -g); trap 'stty \"$saved\"; printf \"\\033[?25hinterrupted\" >&2; exit 7' INT; stty -echo; printf '\\033[?25lready' >&2; read -r ignored"
+    withTerminal capability (command ["sh", "-c", script]) defaultTerminalOptions $ \terminal -> do
+      ready <- expectTerminal terminal TerminalOutput "ready" 5
+      terminalTermiosRestored ready `shouldBe` False
+      _ <- signalTerminal terminal Interrupt
+      finished <- waitTerminal terminal 5
+      terminalStdout finished `shouldBe` BS.empty
+      terminalOutput finished `shouldBe` "\ESC[?25lready\ESC[?25hinterrupted"
+      terminalStatus finished `shouldBe` TerminalExited 7
+      terminalTermiosRestored finished `shouldBe` True
+      terminalCurrentTermios finished `shouldBe` terminalInitialTermios finished
+
+  it "terminal prompt matching spans observations and consumes repeated matches" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    let script = "saved=$(stty -g); stty -echo; printf pro >&2; printf prefix-ready; read -r first; printf 'mpt> tail' >&2; read -r second; printf 'prompt> ' >&2; read -r final; stty \"$saved\""
+    withTerminal capability (command ["sh", "-c", script]) defaultTerminalOptions $ \terminal -> do
+      _ <- expectTerminal terminal StandardOutput "prefix-ready" 5
+      expectTerminal terminal TerminalOutput "prompt> " 0.1 `shouldThrow` (\failure -> case failure of
+        TerminalFailed _ (Just observed) -> terminalOutput observed == "pro" && terminalStatus observed == TerminalRunning
+        _ -> False)
+      _ <- sendTerminal terminal "first\n"
+      _ <- expectTerminal terminal TerminalOutput "prompt> " 5
+      _ <- expectTerminal terminal TerminalOutput "tail" 5
+      started <- getMonotonicTimeNSec
+      expectTerminal terminal TerminalOutput "prompt> " 0.1 `shouldThrow` (\failure -> case failure of
+        TerminalFailed message (Just observed) -> "terminal" `isInfixOf` message && "bytes" `isInfixOf` message &&
+          terminalStatus observed == TerminalRunning && terminalOutput observed == "prompt> tail"
+        _ -> False)
+      finishedExpectation <- getMonotonicTimeNSec
+      let seconds = fromIntegral (finishedExpectation - started) / 1000000000 :: Double
+      seconds `shouldSatisfy` (< 5)
+      _ <- sendTerminal terminal "second\n"
+      _ <- expectTerminal terminal TerminalOutput "prompt> " 5
+      _ <- sendTerminal terminal "finish\n"
+      finished <- waitTerminal terminal 5
+      terminalStdout finished `shouldBe` "prefix-ready"
+      terminalOutput finished `shouldBe` "prompt> tailprompt> "
+      terminalStatus finished `shouldBe` TerminalExited 0
+      terminalTermiosRestored finished `shouldBe` True
+
+  it "terminal tiny geometry recovers before draining long output" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    writeFile e "/workspace/state" "unchanged"
+    baseline <- captureSnapshot capability ["/workspace/state"]
+    let script = "saved=$(stty -g); stty -echo; printf tiny >&2; read -r action; stty size >&2; read -r action; head -c 131072 /dev/zero | tr '\\000' x; printf '<end>'; stty \"$saved\""
+    withTerminal capability (command ["sh", "-c", script])
+      defaultTerminalOptions { terminalRows = 1, terminalColumns = 8 } $ \terminal -> do
+        _ <- expectTerminal terminal TerminalOutput "tiny" 5
+        tiny <- observeTerminal terminal
+        terminalStatus tiny `shouldBe` TerminalRunning
+        terminalStdout tiny `shouldBe` BS.empty
+        checkSnapshot capability baseline
+        _ <- resizeTerminal terminal 24 80
+        _ <- sendTerminal terminal "size\n"
+        _ <- expectTerminal terminal TerminalOutput "24 80\r\n" 5
+        _ <- sendTerminal terminal "recover\n"
+        _ <- expectTerminal terminal StandardOutput "<end>" 5
+        finished <- waitTerminal terminal 5
+        terminalStdout finished `shouldBe` (BS.replicate 131072 120 <> "<end>")
+        terminalStatus finished `shouldBe` TerminalExited 0
+        terminalTermiosRestored finished `shouldBe` True
+    checkSnapshot capability baseline
+
+  it "terminal callback cancellation preserves filesystem snapshot" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    writeFile e "/workspace/state" (BS.pack [0,255,10])
+    baseline <- captureSnapshot capability ["/workspace/state"]
+    withTerminal capability (command ["sh", "-c", "echo $$ > /workspace/cancelled.pid; printf ready >&2; sleep infinity"])
+      defaultTerminalOptions (\terminal -> do
+        _ <- expectTerminal terminal TerminalOutput "ready" 5
+        throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
+    checkSnapshot capability baseline
+    checkCommand e (command ["sh", "-c", "! kill -0 $(cat /workspace/cancelled.pid) 2>/dev/null"])
+      (Result 0 "" "")
 
   it "terminal pipe input remains unread on no-op failure" $ auditedEnvironment $ \e -> do
     capability <- installedDriver e

@@ -235,6 +235,29 @@ test.concurrent('filesystem snapshots preserve physical kinds and diagnose sorte
   )
 })
 
+test.concurrent('filesystem snapshots detect JSON whitespace bytes and deletion at whitespace paths', async ({
+  expect,
+  signal,
+}) => {
+  await withEnvironment(
+    image,
+    async (env) => {
+      await checkIdentity(env)
+      await installFixtureDriver(env)
+      const path = '/workspace/config file.json'
+      await env.writeFile(path, Buffer.from('{"value":1}\n'))
+      const before = await env.snapshot([path])
+      await env.writeFile(path, Buffer.from('{ "value": 1 }\n\n'))
+      const changed = await env.snapshot([path])
+      expect(compareSnapshots(before, changed)).toEqual([{ path, reason: 'content' }])
+      await env.checkCommand({ args: ['rm', path] }, empty)
+      expect(compareSnapshots(changed, await env.snapshot([path]))).toEqual([{ path, reason: 'existence' }])
+      expect(before.entries).toEqual([{ path, state: { kind: 'file', bytes: Buffer.from('{"value":1}\n') } }])
+    },
+    signal,
+  )
+})
+
 test.concurrent('filesystem snapshots reject special files and non-directory path errors', async ({
   expect,
   signal,
@@ -311,6 +334,13 @@ test.concurrent('terminal finite pipe input reports unread bytes and application
       await checkIdentity(env)
       await installFixtureDriver(env)
       const input = Buffer.from([0, 255, 13, 10])
+      await withTerminal(env, { args: ['sh', '-c', 'cat; printf eof >&2'] }, { input }, async (session) => {
+        const done = await session.wait()
+        expect(done.stdout).toEqual(input)
+        expect(done.terminal).toEqual(Buffer.from('eof'))
+        expect(done.unreadInput).toEqual(Buffer.alloc(0))
+        expect(done.status).toEqual({ kind: 'exited', code: 0 })
+      })
       await withTerminal(
         env,
         { args: ['sh', '-c', 'printf "\\377"; printf "ready" >&2; exit 7'] },
@@ -427,11 +457,26 @@ test.concurrent('terminal signals and callback failure clean up a surviving proc
     async (env) => {
       await checkIdentity(env)
       await installFixtureDriver(env)
-      await withTerminal(env, { args: ['sh', '-c', 'printf ready >&2; exec sleep infinity'] }, {}, async (session) => {
-        await session.expect('terminal', Buffer.from('ready'))
-        await session.signal('SIGTERM')
-        expect((await session.wait()).status).toEqual({ kind: 'signaled', signal: 15 })
-      })
+      await withTerminal(
+        env,
+        {
+          args: [
+            'sh',
+            '-c',
+            `saved=$(stty -g < /dev/tty); stty raw -echo < /dev/tty; trap 'stty "$saved" < /dev/tty; printf "\\033[?25h\\033[?1049l" >&2; exit 130' INT; printf '\\033[?1049h\\033[?25lready' >&2; while :; do sleep 0.02; done`,
+          ],
+        },
+        {},
+        async (session) => {
+          await session.expect('terminal', Buffer.from('ready'))
+          await session.signal('SIGINT')
+          const done = await session.wait()
+          expect(done.status).toEqual({ kind: 'exited', code: 130 })
+          expect(done.terminal).toEqual(Buffer.from('\x1b[?1049h\x1b[?25lready\x1b[?25h\x1b[?1049l'))
+          expect(done.termiosRestored).toBe(true)
+          expect(done.currentTermios).toEqual(done.initialTermios)
+        },
+      )
       let escaped!: TerminalSession
       const cause = new Error('consumer assertion failed')
       await expect(
@@ -449,6 +494,158 @@ test.concurrent('terminal signals and callback failure clean up a surviving proc
       await expect(escaped.observe()).rejects.toThrow('closed')
       expect((await env.run({ args: ['sh', '-c', 'kill -0 "$(cat /workspace/terminal-pid)"'] })).exitCode).not.toBe(0)
       await env.checkCommand({ args: ['sh', '-c', 'find /tmp -maxdepth 1 -name "caseyard-pty-*" -print'] }, empty)
+    },
+    signal,
+  )
+})
+
+test.concurrent('terminal raw keys preserve argv cwd HOME TERM and repeated split prompts', async ({
+  expect,
+  signal,
+}) => {
+  await withEnvironment(
+    image,
+    async (env) => {
+      await checkIdentity(env)
+      await installFixtureDriver(env)
+      const keys = Buffer.from([27, 91, 65, 27, 91, 66, 32, 13, 27, 4, 3])
+      await withTerminal(
+        env,
+        {
+          args: [
+            'sh',
+            '-c',
+            `saved=$(stty -g < /dev/tty); stty raw -echo < /dev/tty; printf pro >&2; printf fragment; dd bs=1 count=1 2>/dev/null >/dev/null; printf 'mpt>' >&2; dd bs=1 count=11 2>/dev/null; printf 'prompt>' >&2; dd bs=1 count=1 2>/dev/null; stty "$saved" < /dev/tty; printf '\\000%s\\000%s\\000%s\\000%s\\000%s\\000%s' "$1" "$2" "$3" "$PWD" "$HOME" "$TERM"`,
+            'fixture',
+            'a b',
+            '',
+            '$(literal)',
+          ],
+          workingDir: '/workspace',
+          env: ['HOME=/workspace/caller-home', 'TERM=xterm-256color'],
+        },
+        {},
+        async (terminal) => {
+          await terminal.expect('stdout', Buffer.from('fragment'))
+          await expect(terminal.expect('terminal', Buffer.from('prompt>'), 0.1)).rejects.toMatchObject({
+            name: 'TerminalError',
+            observation: { terminal: Buffer.from('pro') },
+          })
+          await terminal.send(Buffer.from('!'))
+          await terminal.expect('terminal', Buffer.from('prompt>'))
+          await terminal.send(keys)
+          await terminal.expect('terminal', Buffer.from('prompt>'))
+          await expect(terminal.expect('terminal', Buffer.from('prompt>'), 0.1)).rejects.toMatchObject({
+            name: 'TerminalError',
+          })
+          await terminal.send(Buffer.from('x'))
+          const done = await terminal.wait()
+          expect(done.stdout).toEqual(
+            Buffer.concat([
+              Buffer.from('fragment'),
+              keys,
+              Buffer.from('x\0a b\0\0$(literal)\0/workspace\0/workspace/caller-home\0xterm-256color'),
+            ]),
+          )
+          expect(done.terminal).toEqual(Buffer.from('prompt>prompt>'))
+          expect(done.status).toEqual({ kind: 'exited', code: 0 })
+          expect(done.termiosRestored).toBe(true)
+        },
+      )
+    },
+    signal,
+  )
+})
+
+test.concurrent('terminal unsupported TERM is observable without changing explicit filesystem state', async ({
+  expect,
+  signal,
+}) => {
+  await withEnvironment(
+    image,
+    async (env) => {
+      await checkIdentity(env)
+      await installFixtureDriver(env)
+      await env.writeFile('/workspace/config', Buffer.from([0, 255]))
+      const before = await env.snapshot(['/workspace/config', '/workspace/absent'])
+      await withTerminal(
+        env,
+        {
+          args: [
+            'sh',
+            '-c',
+            'test "$TERM" = unsupported-caseyard && { printf "unsupported:%s" "$TERM" >&2; exit 7; }; exit 9',
+          ],
+          env: ['TERM=unsupported-caseyard'],
+        },
+        {},
+        async (terminal) => {
+          const done = await terminal.wait()
+          expect(done.stdout).toEqual(Buffer.alloc(0))
+          expect(done.terminal).toEqual(Buffer.from('unsupported:unsupported-caseyard'))
+          expect(done.status).toEqual({ kind: 'exited', code: 7 })
+          expect(done.termiosRestored).toBe(true)
+        },
+      )
+      await env.checkSnapshot(before)
+    },
+    signal,
+  )
+})
+
+test.concurrent('terminal tiny Enter is a no-op before long-list resize recovery and Escape cancellation', async ({
+  expect,
+  signal,
+}) => {
+  await withEnvironment(
+    image,
+    async (env) => {
+      await checkIdentity(env)
+      await installFixtureDriver(env)
+      await env.writeFile('/workspace/config', Buffer.from([0, 255]))
+      await env.checkCommand({ args: ['ln', '-s', 'config', '/workspace/config-link'] }, empty)
+      const before = await env.snapshot(['/workspace/config', '/workspace/config-link', '/workspace/absent'])
+      const list = Buffer.from(
+        Array.from({ length: 4096 }, (_, index) => `row${String(index).padStart(4, '0')}\n`).join(''),
+      )
+      await withTerminal(
+        env,
+        {
+          args: [
+            'sh',
+            '-c',
+            `saved=$(stty -g < /dev/tty); stty raw -echo < /dev/tty; trap 'stty "$saved" < /dev/tty; printf "\\033[?25h\\033[?1049l" >&2' EXIT; printf '\\033[?1049h\\033[?25ltiny>' >&2; dd bs=1 count=1 2>/dev/null >/dev/null; resized=no; trap 'resized=yes' WINCH; printf ignored >&2; while [ "$resized" = no ]; do sleep 0.02; done; stty size < /dev/tty >&2; i=0; while [ "$i" -lt 4096 ]; do printf 'row%04d\\n' "$i" >&2; i=$((i+1)); done; printf 'list-end>' >&2; dd bs=1 count=3 2>/dev/null >/dev/null; printf 'page4095>' >&2; dd bs=1 count=3 2>/dev/null >/dev/null; printf 'page4094>' >&2; dd bs=1 count=1 2>/dev/null >/dev/null`,
+          ],
+        },
+        { rows: 1, columns: 1 },
+        async (terminal) => {
+          await terminal.expect('terminal', Buffer.from('tiny>'))
+          await terminal.send(Buffer.from([13]))
+          await terminal.expect('terminal', Buffer.from('ignored'))
+          await env.checkSnapshot(before)
+          expect((await terminal.observe()).status).toEqual({ kind: 'running' })
+          await terminal.resize(24, 80)
+          await terminal.expect('terminal', Buffer.from('24 80\n'))
+          await terminal.expect('terminal', Buffer.from('list-end>'))
+          await terminal.send(Buffer.from('\x1b[B'))
+          await terminal.expect('terminal', Buffer.from('page4095>'))
+          await terminal.send(Buffer.from('\x1b[A'))
+          await terminal.expect('terminal', Buffer.from('page4094>'))
+          await terminal.send(Buffer.from([27]))
+          const done = await terminal.wait()
+          expect(done.stdout).toEqual(Buffer.alloc(0))
+          expect(done.terminal).toEqual(
+            Buffer.concat([
+              Buffer.from('\x1b[?1049h\x1b[?25ltiny>ignored24 80\n'),
+              list,
+              Buffer.from('list-end>page4095>page4094>\x1b[?25h\x1b[?1049l'),
+            ]),
+          )
+          expect(done.status).toEqual({ kind: 'exited', code: 0 })
+          expect(done.termiosRestored).toBe(true)
+        },
+      )
+      await env.checkSnapshot(before)
     },
     signal,
   )

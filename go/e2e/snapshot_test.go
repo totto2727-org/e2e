@@ -18,6 +18,9 @@ func TestFilesystemSnapshotScenario(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := environment.WriteFile("/workspace/i json", []byte(`{"same":true}`)); err != nil {
+		t.Fatal(err)
+	}
 	for _, args := range [][]string{
 		{"mkdir", "/workspace/f directory"},
 		{"ln", "-s", "../missing target\n", "/workspace/e dangling"},
@@ -28,7 +31,7 @@ func TestFilesystemSnapshotScenario(t *testing.T) {
 		}
 	}
 	before, err := environment.Snapshot([]string{
-		"/workspace/h link", "/workspace/g missing", "/workspace/f directory", "/workspace/e dangling",
+		"/workspace/i json", "/workspace/h link", "/workspace/g missing", "/workspace/f directory", "/workspace/e dangling",
 		"/workspace/d type", "/workspace/c bytes", "/workspace/b deleted", "/workspace/a created ; literal",
 	})
 	if err != nil {
@@ -38,9 +41,10 @@ func TestFilesystemSnapshotScenario(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{"rm", "/workspace/b deleted", "/workspace/d type", "/workspace/e dangling"},
+		{"rm", "/workspace/b deleted", "/workspace/d type", "/workspace/e dangling", "/workspace/h link"},
 		{"mkdir", "/workspace/d type"},
 		{"ln", "-s", "../other target\n", "/workspace/e dangling"},
+		{"ln", "-s", "./c bytes", "/workspace/h link"},
 		{"chmod", "700", "/workspace/f directory"},
 	} {
 		if err := environment.CheckCommand(cli.Command{Args: args}, cli.Result{}); err != nil {
@@ -54,6 +58,7 @@ func TestFilesystemSnapshotScenario(t *testing.T) {
 		{path: "/workspace/a created ; literal", content: nil},
 		{path: "/workspace/c bytes", content: []byte{0, 254, '\n'}},
 		{path: "/workspace/f directory/unselected child", content: []byte("not recursive")},
+		{path: "/workspace/i json", content: []byte("{\n  \"same\": true\n}\n")},
 	} {
 		if err := environment.WriteFile(file.path, file.content); err != nil {
 			t.Fatal(err)
@@ -65,6 +70,8 @@ func TestFilesystemSnapshotScenario(t *testing.T) {
 		{Path: "/workspace/c bytes", Change: cli.SnapshotContent, BeforeKind: cli.PathFile, AfterKind: cli.PathFile},
 		{Path: "/workspace/d type", Change: cli.SnapshotKind, BeforeKind: cli.PathFile, AfterKind: cli.PathDirectory},
 		{Path: "/workspace/e dangling", Change: cli.SnapshotTarget, BeforeKind: cli.PathSymlink, AfterKind: cli.PathSymlink},
+		{Path: "/workspace/h link", Change: cli.SnapshotTarget, BeforeKind: cli.PathSymlink, AfterKind: cli.PathSymlink},
+		{Path: "/workspace/i json", Change: cli.SnapshotContent, BeforeKind: cli.PathFile, AfterKind: cli.PathFile},
 	}
 	for range 2 {
 		got, err := environment.CompareSnapshot(before)

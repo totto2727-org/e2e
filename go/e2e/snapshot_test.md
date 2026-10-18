@@ -12,6 +12,8 @@ No Python or Go installation is required in either application image.
 Capture explicit paths for a missing path, binary regular files, physical directories, a file link, and a dangling link with a newline in its literal target.
 Require unchanged state before mutation.
 Create and delete paths, change one binary byte, replace a file with a directory, and change the dangling target.
+Retarget a link from `c bytes` to `./c bytes`; the literal target difference must be reported even though both targets resolve to the same file.
+Change JSON whitespace and trailing newline without changing its object values; exact bytes must produce a content difference.
 Compare the complete sorted differences twice to verify that comparison does not update the private baseline.
 Changes to unselected directory children and permissions do not produce differences.
 `CheckSnapshot` must report the changes.
