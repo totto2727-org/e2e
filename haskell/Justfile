@@ -3,11 +3,13 @@ default:
 
 ghc-version := "9.10.3"
 cabal-version := "3.16.1.0"
-cabal := "ghcup run --ghc " + ghc-version + " --cabal " + cabal-version + " -- cabal"
+# Nix's SDK-only DEVELOPER_DIR hides Apple's compiler tools from bindist GHC.
+ghcup := if os() == "macos" { "env -u DEVELOPER_DIR ghcup" } else { "ghcup" }
+cabal := ghcup + " run --ghc " + ghc-version + " --cabal " + cabal-version + " -- cabal"
 
 # Install the pinned tools without changing the user's global selections.
 setup:
-    ghcup run --install --ghc {{ghc-version}} --cabal {{cabal-version}} -- cabal update
+    {{ghcup}} run --install --ghc {{ghc-version}} --cabal {{cabal-version}} -- cabal update
 
 # Use the root Nix shell before these recipes.
 check: generate

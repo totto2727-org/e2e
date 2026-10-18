@@ -47,6 +47,7 @@
           rustTools = [ pkgs.rustup ];
           haskellTools = [
             pkgs.haskellPackages.hpack
+            pkgs.gmp
             pkgs.zlib
             pkgs.pkg-config
           ];
