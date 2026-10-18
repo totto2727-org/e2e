@@ -5,7 +5,18 @@ import tar from 'tar-stream'
 import { log, type StartedTestContainer } from 'testcontainers'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-import { DeadlineError, DockerError, withEnvironment, type Command, type Environment } from '../src/index.js'
+import {
+  DeadlineError,
+  DockerError,
+  FilesystemSnapshot,
+  compareSnapshots,
+  installDriver,
+  withTerminal,
+  type TerminalSession,
+  withEnvironment,
+  type Command,
+  type Environment,
+} from '../src/index.js'
 
 const backend = vi.hoisted(() => {
   const container = {
@@ -422,5 +433,489 @@ describe('Physical path assertions', () => {
     await scoped(async (env) => {
       await expect(env.checkSymlink('/link', '/absolute-target')).rejects.toThrow('mismatch')
     })
+  })
+})
+
+async function installMock(env: Environment): Promise<void> {
+  backend.container.exec
+    .mockResolvedValueOnce({ ...empty, stdout: '/tmp/caseyard-driver-test\n', output: '' })
+    .mockResolvedValueOnce({ ...empty, output: '' })
+  await installDriver(env, Buffer.from('executable'))
+}
+
+async function driverScoped(action: (env: Environment) => Promise<void>): Promise<void> {
+  await scoped(async (env) => {
+    await installMock(env)
+    await action(env)
+  })
+}
+
+function driverResult(value: unknown) {
+  return { ...empty, stdout: JSON.stringify({ ok: true, value }), output: '' }
+}
+
+const terminalObservation = {
+  stdout: [0, 255, 27],
+  terminal: [27, 91, 65],
+  unreadInput: [10],
+  status: { kind: 'exited', code: 7 },
+  termiosRestored: true,
+  initialTermios: [1, [2, 3]],
+  currentTermios: [1, [2, 3]],
+}
+
+function terminalBackend(value: unknown = terminalObservation): void {
+  backend.container.exec.mockImplementation(async (args) => {
+    if (args[1] === 'start') return driverResult({ path: '/tmp/caseyard-pty-test/socket' })
+    const request: unknown = JSON.parse(args[2] ?? '{}')
+    if (typeof request === 'object' && request !== null && 'operation' in request && request.operation === 'close')
+      return driverResult(null)
+    return driverResult(value)
+  })
+}
+
+describe('Static driver installation', () => {
+  test('concurrent install attempts cannot stage or overwrite a second driver', async () => {
+    const staging = Promise.withResolvers<Awaited<ReturnType<StartedTestContainer['exec']>>>()
+    backend.container.exec.mockReturnValueOnce(staging.promise)
+    await scoped(async (env) => {
+      const first = installDriver(env, Buffer.from('first'))
+      await expect(installDriver(env, Buffer.from('second'))).rejects.toThrow('already installed')
+      staging.resolve({ ...empty, stdout: '/tmp/caseyard-driver-test\n', output: '' })
+      await first
+    })
+    expect(backend.container.copyContentToContainer).toHaveBeenCalledExactlyOnceWith([
+      { target: '/tmp/caseyard-driver-test/driver', content: Buffer.from('first'), mode: 0o755 },
+    ])
+  })
+
+  test('failed installation does not publish a usable driver', async () => {
+    backend.container.exec.mockResolvedValue({ ...empty, output: '', exitCode: 1, stderr: 'mktemp denied' })
+    await scoped(async (env) => {
+      await expect(installDriver(env, Buffer.from('executable'))).rejects.toThrow('mktemp denied')
+      await expect(env.snapshot(['/path'])).rejects.toThrow('installDriver')
+    })
+    expect(backend.container.copyContentToContainer).not.toHaveBeenCalled()
+  })
+
+  test('driver APIs reject use before installation', async () => {
+    await scoped(async (env) => {
+      await expect(env.snapshot(['/file'])).rejects.toThrow('installDriver')
+      await expect(withTerminal(env, { args: ['tool'] }, {}, async () => {})).rejects.toThrow('installDriver')
+    })
+    expect(backend.container.exec).not.toHaveBeenCalled()
+  })
+
+  test('stages exact bytes privately, makes them executable, and rejects a second install', async () => {
+    await driverScoped(async (env) => {
+      await expect(installDriver(env, Buffer.from('other'))).rejects.toThrow('already installed')
+    })
+    expect(backend.container.copyContentToContainer).toHaveBeenCalledWith([
+      { target: '/tmp/caseyard-driver-test/driver', content: Buffer.from('executable'), mode: 0o755 },
+    ])
+    expect(backend.container.exec.mock.calls.some(([args]) => args[0] === 'chmod')).toBe(false)
+  })
+
+  test('empty driver bytes fail before staging', async () => {
+    await scoped(async (env) => {
+      await expect(installDriver(env, Buffer.alloc(0))).rejects.toBeInstanceOf(TypeError)
+    })
+    expect(backend.container.exec).not.toHaveBeenCalled()
+  })
+})
+
+describe('Scoped terminals', () => {
+  test('terminal close already in progress survives parent cancellation', async () => {
+    terminalBackend()
+    const controller = new AbortController()
+    const reason = new Error('cancel during terminal close')
+    const closing = Promise.withResolvers<void>()
+    const closed = Promise.withResolvers<Awaited<ReturnType<StartedTestContainer['exec']>>>()
+    const execution = withEnvironment(
+      'local',
+      async (env) => {
+        await installMock(env)
+        await withTerminal(env, { args: ['tool'] }, {}, async () => {
+          backend.container.exec.mockImplementationOnce(() => {
+            closing.resolve()
+            return closed.promise
+          })
+        })
+      },
+      controller.signal,
+    )
+    const assertion = expect(execution).rejects.toBe(reason)
+    await closing.promise
+    controller.abort(reason)
+    closed.resolve(driverResult(null))
+    await assertion
+    expect(backend.container.stop).toHaveBeenCalledOnce()
+  })
+
+  test('terminal cleanup gets a fresh thirty seconds near the environment deadline', async () => {
+    vi.useFakeTimers()
+    terminalBackend()
+    const closing = Promise.withResolvers<void>()
+    const execution = scoped(async (env) => {
+      await installMock(env)
+      await withTerminal(env, { args: ['tool'] }, {}, async () => {
+        await vi.advanceTimersByTimeAsync(59_999)
+        backend.container.exec.mockImplementationOnce(() => {
+          closing.resolve()
+          return new Promise(() => {})
+        })
+      })
+    })
+    const assertion = expect(execution).rejects.toMatchObject({
+      name: 'ExecutionError',
+      cause: { message: 'Terminal cleanup deadline exceeded' },
+    })
+    await closing.promise
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(backend.container.stop).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await assertion
+    expect(backend.container.stop).toHaveBeenCalledOnce()
+  })
+
+  test('cancellation rejects a pending request, invalidates the session and uses container teardown', async () => {
+    terminalBackend()
+    const controller = new AbortController()
+    const reason = new Error('cancel terminal')
+    let escaped!: TerminalSession
+    await expect(
+      withEnvironment(
+        'local',
+        async (env) => {
+          await installMock(env)
+          await withTerminal(env, { args: ['tool'] }, {}, async (session) => {
+            escaped = session
+            backend.container.exec.mockReturnValueOnce(new Promise(() => {}))
+            const assertion = expect(session.observe()).rejects.toMatchObject({ name: 'ExecutionError', cause: reason })
+            controller.abort(reason)
+            await assertion
+          })
+        },
+        controller.signal,
+      ),
+    ).rejects.toBe(reason)
+    await expect(escaped.observe()).rejects.toThrow('closed')
+    expect(backend.container.stop).toHaveBeenCalledOnce()
+    expect(backend.container.exec.mock.calls.some(([args]) => args[2]?.includes('"operation":"close"'))).toBe(false)
+  })
+
+  test('invalid operation bounds reject as promises without invoking the driver', async () => {
+    terminalBackend()
+    await driverScoped(async (env) => {
+      await withTerminal(env, { args: ['tool'] }, {}, async (session) => {
+        const calls = backend.container.exec.mock.calls.length
+        await expect(session.expect('stdout', Buffer.alloc(0))).rejects.toBeInstanceOf(TypeError)
+        await expect(session.expect('stdout', Buffer.from('x'), 0)).rejects.toBeInstanceOf(TypeError)
+        await expect(session.resize(0, 80)).rejects.toBeInstanceOf(TypeError)
+        await expect(session.wait(Number.POSITIVE_INFINITY)).rejects.toBeInstanceOf(TypeError)
+        expect(backend.container.exec).toHaveBeenCalledTimes(calls)
+      })
+    })
+  })
+
+  test('preserves raw bytes and normalized settings, forwards command context, closes and invalidates the handle', async () => {
+    terminalBackend()
+    let escaped!: TerminalSession
+    await driverScoped(async (env) => {
+      await expect(
+        withTerminal(env, { args: ['tool', ''], workingDir: '/workspace', env: ['A=b=c'] }, {}, async (session) => {
+          escaped = session
+          expect(await session.observe()).toEqual({
+            ...terminalObservation,
+            stdout: Buffer.from([0, 255, 27]),
+            terminal: Buffer.from([27, 91, 65]),
+            unreadInput: Buffer.from([10]),
+          })
+          await session.expect('terminal', Buffer.from([27]), 1)
+          await session.send(Buffer.from([3, 4]))
+          await session.resize(20, 80)
+          await session.signal('SIGINT')
+          await session.wait(1)
+          return 42
+        }),
+      ).resolves.toBe(42)
+      await expect(escaped.observe()).rejects.toThrow('closed')
+    })
+    expect(backend.container.exec).toHaveBeenCalledWith(
+      [
+        '/tmp/caseyard-driver-test/driver',
+        'start',
+        JSON.stringify({ argv: ['tool', ''], rows: 40, columns: 120, timeout: 50, input: null }),
+      ],
+      { workingDir: '/workspace', env: { A: 'b=c' } },
+    )
+    expect(backend.container.exec).toHaveBeenLastCalledWith(
+      [
+        '/tmp/caseyard-driver-test/driver',
+        'request',
+        JSON.stringify({ path: '/tmp/caseyard-pty-test/socket', operation: 'close' }),
+      ],
+      { env: {} },
+    )
+  })
+
+  test.each([new Error('callback failure'), undefined])(
+    'closes after arbitrary callback rejection %j',
+    async (cause) => {
+      terminalBackend()
+      await driverScoped(async (env) => {
+        await expect(
+          withTerminal(env, { args: ['tool'] }, {}, async () => {
+            throw cause
+          }),
+        ).rejects.toBe(cause)
+      })
+      expect(backend.container.exec).toHaveBeenLastCalledWith(
+        expect.arrayContaining([expect.stringContaining('"operation":"close"')]),
+        { env: {} },
+      )
+    },
+  )
+
+  test('retains callback and close failures together', async () => {
+    backend.container.exec.mockImplementation(async (args) =>
+      args[1] === 'start'
+        ? driverResult({ path: '/tmp/caseyard-pty-test/socket' })
+        : {
+            ...empty,
+            exitCode: 1,
+            stdout: JSON.stringify({ ok: false, error: 'close failed', observation: null }),
+            output: '',
+          },
+    )
+    const cause = new Error('callback failure')
+    await driverScoped(async (env) => {
+      await expect(
+        withTerminal(env, { args: ['tool'] }, {}, async () => {
+          throw cause
+        }),
+      ).rejects.toMatchObject({
+        name: 'AggregateError',
+        errors: [cause, expect.objectContaining({ name: 'TerminalError', message: 'close failed' })],
+      })
+    })
+  })
+
+  test('pipe stdin keeps unread bytes and rejects interactive sends', async () => {
+    terminalBackend()
+    await driverScoped(async (env) => {
+      await withTerminal(env, { args: ['tool'] }, { input: Buffer.from([0, 255]) }, async (session) => {
+        await expect(session.send(Buffer.from('x'))).rejects.toThrow('pipe')
+        expect((await session.wait()).unreadInput).toEqual(Buffer.from([10]))
+      })
+    })
+  })
+
+  test.each([{ rows: 0 }, { columns: 65536 }, { rows: 0.5 }, { timeout: 0 }, { timeout: Number.NaN }, { timeout: 61 }])(
+    'invalid terminal options fail before start %j',
+    async (options) => {
+      await scoped(async (env) => {
+        await expect(withTerminal(env, { args: ['tool'] }, options, async () => {})).rejects.toBeInstanceOf(TypeError)
+      })
+      expect(backend.container.exec).not.toHaveBeenCalled()
+    },
+  )
+
+  test.each([
+    { ...terminalObservation, stdout: [256] },
+    { ...terminalObservation, terminal: [-1] },
+    { ...terminalObservation, unreadInput: [1.5] },
+    { ...terminalObservation, status: { kind: 'exited', code: -1 } },
+    { ...terminalObservation, status: { kind: 'running', code: 7 } },
+    { ...terminalObservation, status: { kind: 'exited', code: 7, signal: 15 } },
+    { ...terminalObservation, status: { kind: 'signaled', signal: 15, code: 7 } },
+    { ...terminalObservation, termiosRestored: 'true' },
+    { ...terminalObservation, currentTermios: ['invalid'] },
+  ])('rejects malformed observation %j', async (value) => {
+    terminalBackend(value)
+    await driverScoped(async (env) => {
+      await withTerminal(env, { args: ['tool'] }, {}, async (session) => {
+        await expect(session.observe()).rejects.toThrow()
+      })
+    })
+  })
+
+  test('expect failures retain captured raw output', async () => {
+    terminalBackend()
+    await driverScoped(async (env) => {
+      await withTerminal(env, { args: ['tool'] }, {}, async (session) => {
+        backend.container.exec.mockResolvedValueOnce({
+          ...empty,
+          exitCode: 1,
+          stdout: JSON.stringify({
+            ok: false,
+            error: 'waiting for terminal bytes',
+            observation: terminalObservation,
+          }),
+          output: '',
+        })
+        await expect(session.expect('terminal', Buffer.from('absent'), 1)).rejects.toMatchObject({
+          name: 'TerminalError',
+          observation: { stdout: Buffer.from([0, 255, 27]), terminal: Buffer.from([27, 91, 65]) },
+        })
+      })
+    })
+  })
+})
+
+describe('Filesystem snapshots', () => {
+  test('defensively copies arbitrary link target bytes on construction and observation', () => {
+    const target = Buffer.from([255, 10])
+    const snapshot = new FilesystemSnapshot([{ path: '/link', state: { kind: 'symlink', target } }])
+    target.fill(0)
+    const state = snapshot.entries[0]!.state
+    if (state.kind !== 'symlink') throw new Error('Expected symlink')
+    state.target.fill(1)
+    expect(snapshot.entries).toEqual([{ path: '/link', state: { kind: 'symlink', target: Buffer.from([255, 10]) } }])
+  })
+
+  test('empty explicit path sets do not execute or require driver installation', async () => {
+    await scoped(async (env) => {
+      expect((await env.snapshot([])).entries).toEqual([])
+    })
+    expect(backend.container.exec).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    { path: '/path', kind: 'socket', data: [], target: [] },
+    { path: '/path', kind: 'file', data: [256], target: [] },
+    { path: '/path', kind: 'symlink', data: [], target: [-1] },
+    { path: '/path', kind: 'directory', data: [1], target: [] },
+    { path: '/other', kind: 'missing', data: [], target: [] },
+  ])('rejects invalid snapshot wire entry %j', async (entry) => {
+    backend.container.exec.mockResolvedValue(driverResult([entry]))
+    await driverScoped(async (env) => {
+      await expect(env.snapshot(['/path'])).rejects.toThrow()
+    })
+  })
+
+  test('literal targets preserve invalid UTF-8, byte-order markers and trailing newlines', async () => {
+    const target = Buffer.concat([Buffer.from([255]), Buffer.from('\ufefftarget\n')])
+    backend.container.exec.mockResolvedValue(
+      driverResult([{ path: '/link', kind: 'symlink', data: [], target: [...Buffer.from(target)] }]),
+    )
+    await driverScoped(async (env) => {
+      expect((await env.snapshot(['/link'])).entries).toEqual([{ path: '/link', state: { kind: 'symlink', target } }])
+    })
+  })
+
+  test('captures sorted explicit paths, exact bytes, directories and literal dangling links', async () => {
+    const bytes = Buffer.from([0, 255, 13, 10])
+    backend.container.exec.mockResolvedValue(
+      driverResult([
+        { path: '/dir', kind: 'directory', data: [], target: [] },
+        { path: '/file', kind: 'file', data: [...bytes], target: [] },
+        { path: '/link', kind: 'symlink', data: [], target: [...Buffer.from('../absent\n')] },
+        { path: '/missing', kind: 'missing', data: [], target: [] },
+      ]),
+    )
+    await driverScoped(async (env) => {
+      expect((await env.snapshot(['/missing', '/link', '/file', '/dir', '/file'])).entries).toEqual([
+        { path: '/dir', state: { kind: 'directory' } },
+        { path: '/file', state: { kind: 'file', bytes } },
+        { path: '/link', state: { kind: 'symlink', target: Buffer.from('../absent\n') } },
+        { path: '/missing', state: { kind: 'missing' } },
+      ])
+    })
+    expect(backend.container.copyArchiveFromContainer).not.toHaveBeenCalled()
+  })
+
+  test('detaches input and output byte buffers', () => {
+    const bytes = Buffer.from([0, 255])
+    const snapshot = new FilesystemSnapshot([{ path: '/file', state: { kind: 'file', bytes } }])
+    bytes.fill(1)
+    const state = snapshot.entries[0]!.state
+    if (state.kind !== 'file') throw new Error('Expected file')
+    state.bytes.fill(2)
+    expect(snapshot.entries).toEqual([{ path: '/file', state: { kind: 'file', bytes: Buffer.from([0, 255]) } }])
+    expect(Object.isFrozen(snapshot.entries)).toBe(true)
+  })
+
+  test('returns deterministic existence, kind, content and target differences without changing snapshots', () => {
+    const expected = new FilesystemSnapshot([
+      { path: '/target', state: { kind: 'symlink', target: Buffer.from('before') } },
+      { path: '/kind', state: { kind: 'directory' } },
+      { path: '/exists', state: { kind: 'missing' } },
+      { path: '/content', state: { kind: 'file', bytes: Buffer.from([0, 255]) } },
+    ])
+    const actual = new FilesystemSnapshot([
+      { path: '/content', state: { kind: 'file', bytes: Buffer.from([0, 254]) } },
+      { path: '/exists', state: { kind: 'directory' } },
+      { path: '/kind', state: { kind: 'symlink', target: Buffer.from('directory') } },
+      { path: '/target', state: { kind: 'symlink', target: Buffer.from('after') } },
+    ])
+    expect(compareSnapshots(expected, actual)).toEqual([
+      { path: '/content', reason: 'content' },
+      { path: '/exists', reason: 'existence' },
+      { path: '/kind', reason: 'kind' },
+      { path: '/target', reason: 'target' },
+    ])
+    expect(compareSnapshots(expected, expected)).toEqual([])
+    expect(compareSnapshots(new FilesystemSnapshot([]), expected).map(({ reason }) => reason)).toEqual([
+      'existence',
+      'existence',
+      'existence',
+      'existence',
+    ])
+  })
+
+  test.each(['', 'bad\0path'])('rejects invalid path %j without executing classification', async (path) => {
+    await scoped(async (env) => {
+      await expect(env.snapshot([path])).rejects.toBeInstanceOf(TypeError)
+    })
+    expect(backend.container.exec).not.toHaveBeenCalled()
+  })
+
+  test.each(['PermissionError: denied', 'ValueError: Unsupported filesystem kind', 'NotADirectoryError'])(
+    'classification failure is not absence: %s',
+    async (stderr) => {
+      backend.container.exec.mockResolvedValue({
+        exitCode: 1,
+        stdout: JSON.stringify({ ok: false, error: stderr, observation: null }),
+        stderr: '',
+        output: '',
+      })
+      await driverScoped(async (env) => {
+        await expect(env.snapshot(['/path'])).rejects.toThrow(stderr)
+      })
+    },
+  )
+
+  test.each(['null', '[]', '[{}]', '[{"kind":"socket"}]', '[{"kind":"symlink"}]'])(
+    'rejects malformed classification %s',
+    async (stdout) => {
+      backend.container.exec.mockResolvedValue(driverResult(JSON.parse(stdout)))
+      await driverScoped(async (env) => {
+        await expect(env.snapshot(['/path'])).rejects.toThrow()
+      })
+    },
+  )
+
+  test('propagates regular-file read errors', async () => {
+    backend.container.exec.mockResolvedValue({
+      ...empty,
+      exitCode: 1,
+      stdout: JSON.stringify({ ok: false, error: 'file read denied', observation: null }),
+      output: '',
+    })
+    await driverScoped(async (env) => {
+      await expect(env.snapshot(['/file'])).rejects.toThrow('file read denied')
+    })
+  })
+
+  test('checks without updating the baseline and reports sorted path reasons', async () => {
+    backend.container.exec.mockResolvedValue(driverResult([{ path: '/path', kind: 'directory', data: [], target: [] }]))
+    const baseline = new FilesystemSnapshot([{ path: '/path', state: { kind: 'missing' } }])
+    await driverScoped(async (env) => {
+      await expect(env.checkSnapshot(baseline)).rejects.toThrow(
+        'Filesystem snapshot mismatch: [{"path":"/path","reason":"existence"}]',
+      )
+    })
+    expect(baseline.entries).toEqual([{ path: '/path', state: { kind: 'missing' } }])
   })
 })

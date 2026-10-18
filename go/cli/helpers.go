@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 )
 
 // Command describes an argv command without an implicit shell.
@@ -25,8 +26,10 @@ type Result struct {
 }
 
 type Environment struct {
-	ctx       context.Context
-	container runtimeContainer
+	ctx        context.Context
+	container  runtimeContainer
+	driverMu   sync.Mutex
+	driverPath string
 }
 
 type runtimeContainer interface {
@@ -38,27 +41,34 @@ type runtimeContainer interface {
 // Run executes a command within the case's context. On an execution error, the
 // result retains any output already captured, but its exit code is not valid.
 func (e *Environment) Run(command Command) (Result, error) {
-	if len(command.Args) == 0 || command.Args[0] == "" {
-		return Result{}, errors.New("command requires a nonempty executable")
-	}
-	for _, argument := range command.Args {
-		if strings.ContainsRune(argument, '\x00') {
-			return Result{}, errors.New("command arguments must not contain NUL")
-		}
-	}
-	if strings.ContainsRune(command.WorkingDir, '\x00') {
-		return Result{}, errors.New("command working directory must not contain NUL")
-	}
-	for _, entry := range command.Env {
-		if strings.ContainsRune(entry, '\x00') {
-			return Result{}, errors.New("command environment must not contain NUL")
-		}
+	if err := validateCommand(command); err != nil {
+		return Result{}, err
 	}
 	result, err := e.container.Run(e.ctx, command)
 	if err != nil {
 		return result, fmt.Errorf("run %q: %w", command.Args, err)
 	}
 	return result, nil
+}
+
+func validateCommand(command Command) error {
+	if len(command.Args) == 0 || command.Args[0] == "" {
+		return errors.New("command requires a nonempty executable")
+	}
+	for _, argument := range command.Args {
+		if strings.ContainsRune(argument, '\x00') {
+			return errors.New("command arguments must not contain NUL")
+		}
+	}
+	if strings.ContainsRune(command.WorkingDir, '\x00') {
+		return errors.New("command working directory must not contain NUL")
+	}
+	for _, entry := range command.Env {
+		if strings.ContainsRune(entry, '\x00') {
+			return errors.New("command environment must not contain NUL")
+		}
+	}
+	return nil
 }
 
 func (e *Environment) CheckFile(path string, want []byte) error {

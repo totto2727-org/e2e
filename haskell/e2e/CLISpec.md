@@ -2,6 +2,24 @@
 
 Source: [CLISpec.hs](./CLISpec.hs)
 
+## Filesystem snapshots
+
+The `filesystem snapshots` example creates a binary regular file, a physical directory, a file link, and a dangling link.
+It also selects an absent path.
+The test loads a caller-built static driver for the container architecture and installs it once per environment.
+The image needs neither Python nor Go.
+The first capture asserts every entry and the exact file bytes `[0,255,13,10]`.
+A second capture remains equal after a permission change and creation of an unselected directory child.
+The application workflow then changes bytes, replaces a directory with a link, changes a literal link target, and creates the absent directory.
+The comparison must return sorted content, kind, target, and existence differences.
+A failed `checkSnapshot` must leave the application bytes unchanged.
+
+The `snapshot rejects unsupported physical kinds` example creates a FIFO with `mkfifo` and requires an infrastructure error.
+The `snapshot does not treat a non-directory parent as absence` example reads a child path below a regular file and requires an infrastructure error.
+Native transport regressions also cover permission diagnostics, malformed responses, driver read failures, invalid paths, unchanged snapshots, and selected versus unselected missing paths.
+
+All snapshot cases use the same owned-container and caller-image audits as the other examples.
+
 Each scenario is registered as an ordinary Hspec `it` and invokes `withEnvironment` through the per-example `auditedEnvironment` helper.
 No scenario runs before Hspec selects and executes its example.
 Hspec `--match` selects actual execution, and `--dry-run` lists examples without contacting Docker.
@@ -9,6 +27,36 @@ Each invocation inspects the caller-built image, holds a private stopped lease o
 The private test-only Engine audit snapshots the caller image ID and all `org.e2e.haskell.owner` container IDs before each invocation, requires the running container ID to be absent from the prior snapshot, and checks equal snapshots and image IDs after cleanup.
 These audits assume sequential examples and no other Haskell Docker invocation during their snapshot windows.
 The library itself has no concurrency gate. Consumers without snapshot audits can use Hspec `parallel` and `--jobs N`.
+
+## Scoped terminals
+
+These examples use the installed static driver through the public `withTerminal` callback.
+Each example loads the amd64 or arm64 binary selected by the container's `uname -m` response.
+The driver binaries and the root and nonroot fixture images must be built before these examples run.
+The root `pree2e` task supplies these prerequisites.
+
+| Example                                               | Commands and fixtures                                                                                                                                                                                         | Required observations                                                                                                                                                          |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `terminal raw bytes and restoration`                  | `sh`, `stty`, and `dd` save terminal settings, enter raw mode, write ANSI prompt bytes to stderr, and read two literal input bytes into `/workspace/input`. The command uses `/workspace` and `TOKEN=custom`. | Readiness before exit, raw-mode termios difference, literal `[3,4]` input, separate exact stdout with NUL and byte 255, unchanged ANSI bytes, exit zero, and restored termios. |
+| `terminal pipe input remains unread on no-op failure` | `sh` writes `ready` to stderr and exits 7 without reading pipe input `[0,255,10]`.                                                                                                                            | Exact terminal bytes, empty stdout, exit 7, all input unread, restored termios, and rejection of terminal sends in pipe mode.                                                  |
+| `terminal pipe input delivers exact bytes and EOF`    | `cat` reads pipe input `[0,255,13,10]` until EOF.                                                                                                                                                             | Exact separate stdout, empty terminal output, no unread input, and exit zero.                                                                                                  |
+| `terminal resize and signal`                          | `sh` installs a WINCH handler that runs `stty size`, prints readiness, and waits.                                                                                                                             | A resize produces `12 34` through the terminal, and `Terminate` produces signal 15 without stdout.                                                                             |
+| `terminal scope closes a surviving process group`     | `sh` records its PID, prints readiness, and waits in `sleep infinity`.                                                                                                                                        | Returning from the callback kills the surviving process group before a normal environment command checks its PID.                                                              |
+
+Expectations use byte readiness, not sleeps.
+The examples keep environment checks inside the terminal callback where the process must still be running.
+The native suite separately checks scoped cleanup on caller failure and asynchronous exceptions, closed handles, malformed byte arrays, and error observations.
+
+## Nonroot driver and permission scenarios
+
+The `nonroot image installs one driver for snapshots and terminals` example uses `e2e-example-nonroot:local`.
+It writes `/tmp/state` as the image user, captures its exact bytes plus a missing path, and runs a terminal command with separate `success` and `ready` output.
+The same installed driver must support both operations without root privileges or a post-transfer `chmod`.
+
+The `nonroot snapshot inspection permission failure is not absence` example creates a directory with mode `000` and selects a child beneath it.
+The `nonroot snapshot file read permission failure is not absence` example selects a regular file with mode `000`.
+Both operations must fail instead of recording `Missing`.
+All nonroot examples use the same owned-container and caller-image preservation audits as the root examples.
 
 ## `greeting`
 

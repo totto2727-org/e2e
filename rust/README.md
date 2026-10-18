@@ -89,16 +89,110 @@ Except for `container_id`, all methods are async.
 | `read_file`                | Native `ContainerAsync::copy_file_from` reads the first regular file, skips additional archive entries, and rejects directories. Symbolic-link behavior follows Docker.                                         |
 | `write_file`               | Testcontainers has no public running-container upload method. The helper uses its configured, re-exported Bollard client and a single-file tar archive with mode `0644`.                                        |
 
+### Static driver installation
+
+Snapshots and terminal sessions require a trusted caller-built static Linux driver.
+See [driver setup](../README.md#static-driver-for-snapshots-and-terminals) for the supported build procedure and architecture requirements.
+Call `env.install_driver(&bytes).await?` once inside each environment scope, before either feature.
+The library uploads it with executable mode `0755` inside a private mode-`0700` directory.
+The executable mode also supports nonroot image users when Docker assigns uploaded files to root.
+Installation is shared by cloned environment handles and rejects empty bytes or a second installation.
+The helper is removed with the container.
+Existing command and file APIs do not require installation.
+The crate neither downloads nor embeds a binary, invokes Go, nor requires Python in the image.
+The image must support execution from `/tmp` and provide `mktemp` for installation.
+
+### Filesystem snapshots
+
+Install the driver before filesystem snapshots.
+`env.snapshot(paths).await?` captures only the explicit paths and returns a `FilesystemSnapshot` with a sorted `BTreeMap<String, PathState>` named `entries`.
+Duplicate paths are captured once.
+`PathState` is `Missing`, `RegularFile { content: Vec<u8> }`, `Directory`, or `Symlink { target: Vec<u8> }`.
+File bytes and literal link targets are exact, including dangling links.
+Permission errors, read errors, unsupported kinds such as FIFOs, and malformed transport responses fail capture instead of recording absence.
+
+```rust,ignore
+let baseline = env.snapshot(["/workspace/config", "/workspace/output"]).await?;
+// Run application commands here.
+env.check_snapshot(&baseline).await?;
+let after = env.snapshot(baseline.entries.keys().cloned()).await?;
+let differences = baseline.differences(&after);
+```
+
+`check_snapshot` captures the baseline paths again and returns an assertion error for any change.
+`differences` is a pure comparison over the union of selected paths.
+It returns sorted `PathDifference` values with `path`, `changes`, `before`, and `after` fields.
+`SnapshotChange` identifies `Existence`, `Kind`, `Content`, or `Target` changes.
+Snapshots do not recurse, compare metadata, write files, or update baselines automatically.
+Capture is sequential, not an atomic filesystem transaction, so callers must stop concurrent filesystem changes when they need a stable baseline.
+
+### Scoped terminal sessions
+
+`env.with_terminal(command, options, callback).await` returns `Result<T, ScopeError<E>>` and preserves the callback's concrete error type.
+The command's working directory and environment entries apply to the child.
+The child has a controlling Linux terminal with stdin and stderr attached, while stdout is a separate pipe.
+`TerminalOptions::default()` selects 40 rows, 120 columns, terminal stdin, and a 50-second watchdog.
+Set `input: Some(bytes)` to supply finite pipe stdin plus EOF instead, with stderr still on the terminal.
+Dimensions must be nonzero `u16` values, and timeouts must be greater than zero and at most 60 seconds.
+Neither timeout extends the environment's existing budget.
+
+```rust,ignore
+use caseyard::{TerminalChannel, TerminalOptions, TerminalStatus};
+use std::time::Duration;
+
+let driver = std::fs::read("caseyard-driver-linux-arm64")?;
+env.install_driver(&driver).await?;
+let observed = env.with_terminal(
+    Command::new(["sh", "-c", "printf 'name? ' >&2; read name; printf '%s' \"$name\""]),
+    TerminalOptions::default(),
+    |terminal| async move {
+        terminal.expect(TerminalChannel::Terminal, b"name? ", Duration::from_secs(5)).await?;
+        terminal.send(b"Caseyard\n").await?;
+        terminal.wait(Duration::from_secs(5)).await
+    },
+).await?;
+assert_eq!(observed.status, TerminalStatus::Exited { code: 0 });
+assert_eq!(observed.stdout, b"Caseyard");
+```
+
+| `TerminalSession` method          | Behavior                                                                                                                          |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `observe()`                       | Return cumulative raw bytes and current process observations without waiting for exit.                                            |
+| `expect(channel, bytes, timeout)` | Match nonempty exact bytes across reads, consume through the match, and retain trailing bytes for the next match on that channel. |
+| `send(bytes)`                     | Send literal bytes to the terminal. Reject pipe stdin. Ctrl-C and Ctrl-D remain literal input.                                    |
+| `resize(rows, columns)`           | Update terminal dimensions and send SIGWINCH to the application process group.                                                    |
+| `signal(TerminalSignal)`          | Send an explicit named process-group signal, independently of terminal input.                                                     |
+| `wait(timeout)`                   | Wait for exit, drain output, and return an observation even for nonzero application exit.                                         |
+
+Every method is async and returns `Result<TerminalObservation, Error>`.
+`TerminalObservation` contains cumulative `stdout`, `terminal`, and `unread_input` byte vectors, typed `status`, `termios_restored`, `initial_termios`, and `current_termios`.
+`TerminalStatus` is `Running`, `Exited { code }`, or `Signaled { signal }`.
+`TerminalSettings` is a tuple of input, output, control, and local flags, input and output speeds, and control-character bytes.
+The helper excludes PENDIN bookkeeping from comparison.
+Termios restoration during execution is only an observation, not proof of restoration at exit.
+ANSI, screen, and cursor restoration assertions remain caller-owned raw-byte checks.
+There is no cross-channel ordering guarantee.
+Pipe input that the application did not consume is reported in `unread_input` after exit.
+
+The terminal is closed after success, callback failure, or panic, and escaped session handles then return cancellation errors.
+Each terminal close has a fresh total 30-second budget that includes session-lock acquisition and the helper request.
+Session cancellation also stops in-flight or queued requests before close.
+Dropping a terminal-scope future marks its handles closed and schedules best-effort close through Tokio's blocking pool because Testcontainers' exec futures are not `Send`.
+Keep the Tokio runtime alive for this fallback.
+The helper watchdog and environment container teardown remain the final process boundaries if the close request cannot complete, including a lost start response.
+Ordinary environment assertions can run between terminal requests in the callback.
+
 ### Errors
 
-| Error or condition                     | Behavior                                                                                                                                                   |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Error::Execution { failure, output }` | Retains bytes already drained by the helper. No valid exit status. Stdout is drained before stderr, so unread stderr is not guaranteed on failure.         |
-| `ExecutionFailure`                     | `Deadline`, `Cancelled`, boxed native `Testcontainers` error, `Io`, or `Protocol`.                                                                         |
-| Other infrastructure errors            | `Error::Testcontainers`, `Docker` for image inspection or upload, and `Archive` for local tar creation. Native causes remain available through `source()`. |
-| `ScopeError<E>`                        | `Infrastructure(Error)`, `Callback(E)`, or `Cleanup { prior: Option<Box<ScopeError<E>>>, errors: Vec<Error> }`.                                            |
-| Explicit cleanup failure               | Retains the prior typed callback error. Testcontainers' Drop fallback logs its own failures instead of returning them.                                     |
-| Callback panic                         | Resumes the original payload after explicit cleanup. An accompanying cleanup failure is reported to stderr.                                                |
+| Error or condition                       | Behavior                                                                                                                                                          |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Error::Execution { failure, output }`   | Retains bytes already drained by the helper. No valid exit status. Stdout is drained before stderr, so unread stderr is not guaranteed on failure.                |
+| `ExecutionFailure`                       | `Deadline`, `Cancelled`, boxed native `Testcontainers` error, `Io`, or `Protocol`.                                                                                |
+| Other infrastructure errors              | `Error::Testcontainers`, `Docker` for image inspection or upload, and `Archive` for local tar creation. Native causes remain available through `source()`.        |
+| `Error::Driver { message, observation }` | Retains helper diagnostics and an optional boxed `TerminalFailureObservation`, either complete typed observations or raw partial channels at a watchdog boundary. |
+| `ScopeError<E>`                          | `Infrastructure(Error)`, `Callback(E)`, or `Cleanup { prior: Option<Box<ScopeError<E>>>, errors: Vec<Error> }`.                                                   |
+| Explicit cleanup failure                 | Retains the prior typed callback error. Testcontainers' Drop fallback logs its own failures instead of returning them.                                            |
+| Callback panic                           | Resumes the original payload after explicit cleanup. An accompanying cleanup failure is reported to stderr.                                                       |
 
 ## Lifecycle and cancellation
 
@@ -129,7 +223,8 @@ This package does not maintain a separate endpoint resolver or API-version negot
 
 Testcontainers' default features support Unix sockets, HTTP/TCP, and HTTPS/TLS.
 Its optional properties-file configuration is not enabled by this package.
-Docker contexts, SSH endpoints, Windows containers, interactive stdin, and PTY are not part of this library's public contract.
+Docker contexts, SSH endpoints, and Windows containers are not part of this library's public contract.
+Interactive terminal stdin is available only through the optional installed-driver terminal API, not ordinary `run`.
 
 ## Development
 

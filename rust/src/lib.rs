@@ -9,6 +9,15 @@
 //! }).await?;
 //! # Ok(()) }
 //! ```
+mod driver;
+mod terminal;
+pub use terminal::{
+    TerminalChannel, TerminalFailureObservation, TerminalObservation, TerminalOptions,
+    TerminalOutput, TerminalSession, TerminalSettings, TerminalSignal, TerminalStatus,
+};
+mod snapshot;
+pub use snapshot::{FilesystemSnapshot, PathDifference, PathState, SnapshotChange};
+
 use futures_util::FutureExt;
 use std::{
     fmt,
@@ -135,6 +144,10 @@ pub enum Error {
         output: PartialOutput,
     },
     Assertion(String),
+    Driver {
+        message: String,
+        observation: Option<Box<TerminalFailureObservation>>,
+    },
     Archive(std::io::Error),
     Deadline,
     Cancelled,
@@ -242,6 +255,7 @@ pub struct Environment {
     id: String,
     deadline: Instant,
     cancel: CancellationToken,
+    driver: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 impl Environment {
     /// Immutable identity for isolation assertions, not a mutable Docker handle.
@@ -314,6 +328,9 @@ impl Environment {
     /// Returns input, archive, upload, cancellation, or deadline errors.
     /// The parent directory must already exist.
     pub async fn write_file(&self, path: &str, bytes: &[u8]) -> Result<(), Error> {
+        self.write_file_mode(path, bytes, 0o644).await
+    }
+    async fn write_file_mode(&self, path: &str, bytes: &[u8], mode: u32) -> Result<(), Error> {
         path_valid(path)?;
         let path = Path::new(path);
         let name = path
@@ -323,7 +340,7 @@ impl Environment {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        let archive = file_archive(name, bytes)?;
+        let archive = file_archive(name, bytes, mode)?;
         self.bounded(async {
             let owner = self.owner()?;
             let guard = owner.read().await;
@@ -447,11 +464,11 @@ fn compare_command(actual: &CommandResult, expected: &CommandResult) -> Result<(
         )))
     }
 }
-fn file_archive(name: &std::ffi::OsStr, bytes: &[u8]) -> Result<Vec<u8>, Error> {
+fn file_archive(name: &std::ffi::OsStr, bytes: &[u8], mode: u32) -> Result<Vec<u8>, Error> {
     let mut archive = tar::Builder::new(Vec::new());
     let mut header = tar::Header::new_gnu();
     header.set_size(bytes.len() as u64);
-    header.set_mode(0o644);
+    header.set_mode(mode);
     header.set_cksum();
     archive.append_data(&mut header, Path::new(name), bytes)?;
     Ok(archive.into_inner()?)
@@ -525,6 +542,7 @@ where
         id: id.clone(),
         deadline,
         cancel: cancel.clone(),
+        driver: Arc::new(tokio::sync::Mutex::new(None)),
     };
     let outcome = AssertUnwindSafe(async { callback(env).await })
         .catch_unwind()

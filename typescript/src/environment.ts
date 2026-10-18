@@ -5,7 +5,9 @@ import tar from 'tar-stream'
 import type { StartedTestContainer } from 'testcontainers'
 
 import { untilCancelled } from './cancellation.js'
+import { registerDriverWriter, registerDriverCleanup } from './driver.js'
 import { DockerError, dockerFailure } from './errors.js'
+import { captureSnapshot, compareSnapshots, type FilesystemSnapshot } from './snapshot.js'
 
 export interface Command {
   args: readonly string[]
@@ -59,6 +61,8 @@ export interface Environment {
   checkRegularFile(path: string): Promise<void>
   checkDirectory(path: string): Promise<void>
   checkSymlink(path: string, literalTarget: string): Promise<void>
+  snapshot(paths: readonly string[]): Promise<FilesystemSnapshot>
+  checkSnapshot(expected: FilesystemSnapshot): Promise<void>
 }
 
 export class DockerEnvironment implements Environment {
@@ -68,9 +72,26 @@ export class DockerEnvironment implements Environment {
   constructor(container: StartedTestContainer, signal: AbortSignal) {
     this.container = container
     this.signal = signal
+    registerDriverWriter(this, (path, bytes) => this.write(path, bytes, 0o755))
+    registerDriverCleanup(this, (command, cleanupSignal) => this.execute(command, cleanupSignal))
+  }
+
+  async snapshot(paths: readonly string[]): Promise<FilesystemSnapshot> {
+    this.signal.throwIfAborted()
+    return captureSnapshot(this, paths)
+  }
+
+  async checkSnapshot(expected: FilesystemSnapshot): Promise<void> {
+    const actual = await this.snapshot(expected.entries.map(({ path }) => path))
+    const differences = compareSnapshots(expected, actual)
+    if (differences.length) throw new Error(`Filesystem snapshot mismatch: ${JSON.stringify(differences)}`)
   }
 
   async run(command: Command): Promise<Result> {
+    return this.execute(command, this.signal)
+  }
+
+  private async execute(command: Command, signal: AbortSignal): Promise<Result> {
     validateCommand(command)
     const env = Object.fromEntries(
       (command.env ?? []).map((entry) => {
@@ -80,13 +101,13 @@ export class DockerEnvironment implements Environment {
       }),
     )
     try {
-      this.signal.throwIfAborted()
+      signal.throwIfAborted()
       const result = await untilCancelled(
         this.container.exec([...command.args], {
           ...(command.workingDir === undefined ? {} : { workingDir: command.workingDir }),
           env,
         }),
-        this.signal,
+        signal,
       )
       if (!Number.isInteger(result.exitCode) || result.exitCode < 0)
         throw new DockerError('Testcontainers did not report an application exit code')
@@ -95,7 +116,7 @@ export class DockerEnvironment implements Environment {
       // Testcontainers exposes output only after exec succeeds, never on rejection.
       throw new ExecutionError(
         { stdout: '', stderr: '' },
-        this.signal.aborted ? this.signal.reason : cause instanceof DockerError ? cause : dockerFailure(cause),
+        signal.aborted ? signal.reason : cause instanceof DockerError ? cause : dockerFailure(cause),
       )
     }
   }
@@ -112,12 +133,16 @@ export class DockerEnvironment implements Environment {
   }
 
   async writeFile(path: string, bytes: Uint8Array): Promise<void> {
+    return this.write(path, bytes, 0o644)
+  }
+
+  private async write(path: string, bytes: Uint8Array, mode: number): Promise<void> {
     pathValue(path)
     this.signal.throwIfAborted()
     if (!(await this.probe('-d', posix.dirname(path)))) throw new Error(`Parent directory does not exist: ${path}`)
     try {
       await untilCancelled(
-        this.container.copyContentToContainer([{ target: path, content: Buffer.from(bytes), mode: 0o644 }]),
+        this.container.copyContentToContainer([{ target: path, content: Buffer.from(bytes), mode }]),
         this.signal,
       )
     } catch (cause) {

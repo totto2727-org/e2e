@@ -2,6 +2,246 @@
 
 Source: [e2e.rs](./e2e.rs)
 
+## `filesystem_snapshots`
+
+### Scope
+
+Verify explicit physical path snapshots and deterministic differences without baseline updates.
+
+### Commands under test
+
+The installed static driver captures state.
+`sh`, `mkdir`, `ln`, `rmdir`, `touch`, and `mkfifo` prepare and mutate fixtures.
+
+### Arguments and options
+
+Capture `/workspace/binary`, `/workspace/directory`, `/workspace/missing`, `/workspace/link`, and `/workspace/dangling`.
+The regular file contains `[0, 255, 10]`, and links have literal relative targets.
+
+### Preconditions and fixtures
+
+Build `e2e-example:local` and both [static driver artifacts](../README.md#static-driver-installation) before this ignored Docker test.
+The test selects the binary for the container's `uname -m` and installs it through the public API.
+
+### Execution flow
+
+1. Create a regular file, directory, valid link, and dangling link, leaving one selected path absent.
+2. Capture a baseline and check every state, exact bytes, and literal targets.
+3. Add an unselected directory child and change file permissions, then confirm the baseline still matches.
+4. Mutate content, target, kind, and existence.
+5. Compare fresh state against the original baseline and assert each sorted difference.
+6. Reject a FIFO and a path whose parent is a regular file.
+
+### Expected results
+
+Differences appear in lexical path order with `Content`, `Target`, `Kind`, and `Existence` reasons.
+The baseline's bytes remain unchanged, and `check_snapshot` returns an assertion for the mutations.
+Unsupported kinds and inspection errors are driver failures, not missing paths.
+
+### Notes
+
+The snapshot API does not recurse or compare metadata.
+
+## `terminal_raw_bytes_expect_resize_and_restoration`
+
+### Scope
+
+Verify raw terminal interaction, separate stdout, incremental byte expectations, and termios restoration.
+
+### Commands under test
+
+`sh`, `stty`, `printf`, and `dd` run inside a scoped terminal.
+
+### Arguments and options
+
+Use default terminal options, set the working directory to `/workspace`, and set `CASEYARD_VALUE=literal value`.
+Send raw bytes `[3, 4]` and resize to 24 rows by 80 columns.
+
+### Preconditions and fixtures
+
+Install the matching driver and write `/workspace/unchanged` with bytes `baseline`.
+
+### Execution flow
+
+1. Save termios, switch to raw mode without echo, and print an ANSI terminal prompt plus stdout context.
+2. Expect both channels separately, resize, and check the unchanged file from the session callback.
+3. Send literal control bytes and match each stdout byte in sequence.
+4. Restore termios, exit `7`, and inspect the final observation and escaped session handle.
+
+### Expected results
+
+Stdout is exactly `/workspace:literal value:` followed by `[3, 4]`.
+Terminal bytes are exactly `ESC[2JreadyESC[0m`, and both normalized termios values match.
+Exit `7` is an observation, and the escaped session handle returns cancellation after scope exit.
+
+### Notes
+
+The second byte expectation verifies that the first match retains trailing buffered output.
+
+## `terminal_pipe_input_unread_bytes_and_signal_are_observable`
+
+### Scope
+
+Verify finite pipe stdin, unread input, and an explicit process-group signal independently of literal terminal input.
+
+### Commands under test
+
+One shell prints readiness and exits without reading stdin.
+A second shell prints readiness and replaces itself with `sleep infinity`.
+
+### Arguments and options
+
+The first session receives pipe input `[0, 255, 4]`.
+The second uses terminal stdin and receives `TerminalSignal::Terminate`.
+
+### Preconditions and fixtures
+
+Install the matching driver in a fresh root-image environment.
+
+### Execution flow
+
+1. Expect the first child's readiness, reject terminal `send`, and wait for exit.
+2. Check that all supplied pipe bytes remain unread.
+3. Start the second child, expect readiness, send SIGTERM, and wait.
+
+### Expected results
+
+The first observation has exit `7`, empty stdout, and exact unread bytes `[0, 255, 4]`.
+The second reports `Signaled { signal: 15 }`.
+
+### Notes
+
+A signal operation is not a Ctrl-C byte alias.
+
+## `terminal_callback_failure_closes_process_and_socket`
+
+### Scope
+
+Verify that a callback error does not leave the terminal process or control socket alive.
+
+### Commands under test
+
+A shell records its PID, prints readiness, and replaces itself with `sleep infinity`.
+`kill -0` probes the exact recorded PID, and `find` checks this fresh container's private terminal directories.
+
+### Arguments and options
+
+Use default terminal options and `/workspace/terminal-pid` for the process identity.
+
+### Preconditions and fixtures
+
+Install the matching driver in a fresh environment.
+
+### Execution flow
+
+1. Expect readiness and return an intentional typed assertion error from the session callback.
+2. Require the original callback-error variant.
+3. Probe the child PID and scan `/tmp` for terminal socket directories.
+
+### Expected results
+
+The original error is preserved, the child PID no longer exists, and no owned terminal directory remains.
+
+### Notes
+
+The ordinary environment remains usable after the terminal scope fails.
+
+## `terminal_future_drop_closes_process_and_escaped_handle`
+
+### Scope
+
+Verify Tokio Drop fallback without dropping the surrounding environment.
+
+### Commands under test
+
+The child fixture, PID probe, and directory scan match the preceding cleanup case.
+
+### Arguments and options
+
+Use a readiness expectation and a oneshot channel to return an escaped session handle while the callback remains pending.
+
+### Preconditions and fixtures
+
+Install the matching driver and keep the Tokio runtime alive while dropping the terminal future.
+
+### Execution flow
+
+1. Poll the terminal scope until readiness and receipt of the escaped handle.
+2. Drop the pending scope and require immediate cancellation from the escaped handle.
+3. Poll the exact child PID for at most five seconds, then inspect terminal directories.
+
+### Expected results
+
+The asynchronous fallback closes the child process and socket directory within the observation budget.
+
+### Notes
+
+Readiness is established by bytes, not a fixed sleep.
+
+## `terminal_panic_is_resumed_after_process_cleanup`
+
+### Scope
+
+Verify that a callback panic is resumed only after explicit terminal cleanup.
+
+### Commands under test
+
+Use the same PID-recording `sleep infinity` fixture, PID probe, and terminal-directory scan.
+
+### Arguments and options
+
+The callback panics with a concrete `123_u32` payload after readiness.
+
+### Preconditions and fixtures
+
+Install the matching driver in a fresh environment.
+
+### Execution flow
+
+1. Catch unwinding around the terminal scope.
+2. Verify the original panic payload.
+3. Check that the child PID and terminal directory are absent.
+
+### Expected results
+
+The payload remains `123_u32`, and cleanup completes before the panic reaches its caller.
+
+### Notes
+
+This test checks a session panic without destroying the surrounding environment.
+
+## `nonroot_driver_installation_snapshot_and_terminal`
+
+### Scope
+
+Verify that a nonroot image user can execute a driver uploaded by Docker.
+
+### Commands under test
+
+`id -u` observes the image user, the driver captures one absent path, and `printf nonroot` runs in a terminal.
+
+### Arguments and options
+
+Use `e2e-example-nonroot:local`, `/tmp/caseyard-nonroot-missing`, and default terminal options.
+
+### Preconditions and fixtures
+
+Build the explicit nonroot image and matching static driver artifacts before this ignored test.
+
+### Execution flow
+
+1. Install the helper through the same public API used by root-image tests.
+2. Require a nonzero user ID and capture the absent path.
+3. Run the terminal child and wait for exit.
+
+### Expected results
+
+The snapshot reports `Missing`, stdout is exactly `nonroot`, and the application exits `0`.
+
+### Notes
+
+Driver uploads use executable archive mode without a chmod operation on a potentially root-owned file.
+
 ## `greeting`
 
 ### Scope

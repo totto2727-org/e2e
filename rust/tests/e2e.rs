@@ -3,12 +3,333 @@ use std::time::{Duration, Instant};
 
 const IMAGE: &str = "e2e-example:local";
 
+async fn install_test_driver(env: &caseyard::Environment) -> Result<(), Error> {
+    let architecture = env.run(Command::new(["uname", "-m"])).await?;
+    let name = match architecture.stdout.as_slice() {
+        b"aarch64\n" => "driver-linux-arm64",
+        b"x86_64\n" => "driver-linux-amd64",
+        other => {
+            return Err(Error::Unsupported(format!(
+                "container architecture: {other:?}"
+            )));
+        }
+    };
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../go/target")
+            .join(name),
+    )?;
+    env.install_driver(&bytes).await
+}
+
 fn expected(exit_code: i64, stdout: &str, stderr: &str) -> CommandResult {
     CommandResult {
         exit_code,
         stdout: stdout.as_bytes().to_vec(),
         stderr: stderr.as_bytes().to_vec(),
     }
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built e2e-example:local, matching static driver and Docker"]
+async fn filesystem_snapshots() -> Result<(), ScopeError<Error>> {
+    use caseyard::{PathState, SnapshotChange};
+    with_environment(IMAGE, |env| async move {
+        install_test_driver(&env).await?;
+        env.write_file("/workspace/binary", &[0, 255, 10]).await?;
+        env.check_command(Command::new(["sh", "-c", "mkdir /workspace/directory; ln -s binary /workspace/link; ln -s 'missing target' /workspace/dangling"]), expected(0, "", "")).await?;
+        let paths = ["/workspace/missing", "/workspace/link", "/workspace/directory", "/workspace/dangling", "/workspace/binary"];
+        let baseline = env.snapshot(paths).await?;
+        assert_eq!(baseline.entries["/workspace/binary"], PathState::RegularFile { content: vec![0, 255, 10] });
+        assert_eq!(baseline.entries["/workspace/directory"], PathState::Directory);
+        assert_eq!(baseline.entries["/workspace/missing"], PathState::Missing);
+        assert_eq!(baseline.entries["/workspace/link"], PathState::Symlink { target: b"binary".to_vec() });
+        assert_eq!(baseline.entries["/workspace/dangling"], PathState::Symlink { target: b"missing target".to_vec() });
+        env.check_command(Command::new(["sh", "-c", "touch /workspace/directory/unselected; chmod 0600 /workspace/binary"]), expected(0, "", "")).await?;
+        env.check_snapshot(&baseline).await?;
+        env.write_file("/workspace/binary", &[255, 0]).await?;
+        env.check_command(Command::new(["sh", "-c", "rm /workspace/directory/unselected; rmdir /workspace/directory; touch /workspace/directory /workspace/missing; ln -snf changed /workspace/dangling"]), expected(0, "", "")).await?;
+        let after = env.snapshot(paths).await?;
+        let differences = baseline.differences(&after);
+        assert_eq!(differences.iter().map(|diff| (diff.path.as_str(), diff.changes[0])).collect::<Vec<_>>(), [
+            ("/workspace/binary", SnapshotChange::Content),
+            ("/workspace/dangling", SnapshotChange::Target),
+            ("/workspace/directory", SnapshotChange::Kind),
+            ("/workspace/missing", SnapshotChange::Existence),
+        ]);
+        assert!(matches!(env.check_snapshot(&baseline).await, Err(Error::Assertion(_))));
+        assert_eq!(baseline.entries["/workspace/binary"], PathState::RegularFile { content: vec![0, 255, 10] });
+        env.check_command(Command::new(["mkfifo", "/workspace/fifo"]), expected(0, "", "")).await?;
+        assert!(matches!(env.snapshot(["/workspace/fifo"]).await, Err(Error::Driver { .. })));
+        // A non-directory parent is an inspection error, not a missing child.
+        assert!(matches!(env.snapshot(["/workspace/binary/child"]).await, Err(Error::Driver { .. })));
+        Ok(())
+    }).await
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built image, matching static driver and Docker"]
+async fn terminal_raw_bytes_expect_resize_and_restoration() -> Result<(), Box<dyn std::error::Error>>
+{
+    use caseyard::{TerminalChannel, TerminalOptions, TerminalStatus};
+    with_environment(IMAGE, |env| async move {
+        install_test_driver(&env).await.map_err(ScopeError::Infrastructure)?;
+        env.write_file("/workspace/unchanged", b"baseline").await.map_err(ScopeError::Infrastructure)?;
+        let checks = env.clone();
+        let (escaped, observed) = env.with_terminal(
+            Command { working_dir: Some("/workspace".into()), env: vec!["CASEYARD_VALUE=literal value".into()], ..Command::new(["sh", "-c", "saved=$(stty -g < /dev/tty); stty raw -echo < /dev/tty; printf '\\033[2Jready' >&2; printf '%s:%s:' \"$PWD\" \"$CASEYARD_VALUE\"; dd bs=1 count=2 2>/dev/null; stty \"$saved\" < /dev/tty; printf '\\033[0m' >&2; exit 7"]) },
+            TerminalOptions::default(),
+            |session| async move {
+                session.expect(TerminalChannel::Terminal, b"ready", Duration::from_secs(5)).await?;
+                session.expect(TerminalChannel::Stdout, b"/workspace:literal value:", Duration::from_secs(5)).await?;
+                session.resize(24, 80).await?;
+                checks.check_file("/workspace/unchanged", b"baseline").await?;
+                session.send(&[3,4]).await?;
+                session.expect(TerminalChannel::Stdout, &[3], Duration::from_secs(5)).await?;
+                session.expect(TerminalChannel::Stdout, &[4], Duration::from_secs(5)).await?;
+                let observed = session.wait(Duration::from_secs(5)).await?;
+                Ok::<_, Error>((session, observed))
+            },
+        ).await?;
+        assert_eq!(observed.status, TerminalStatus::Exited { code: 7 });
+        assert_eq!(observed.stdout, b"/workspace:literal value:\x03\x04");
+        assert_eq!(observed.terminal, b"\x1b[2Jready\x1b[0m");
+        assert!(observed.termios_restored);
+        assert_eq!(observed.initial_termios, observed.current_termios);
+        assert!(matches!(escaped.observe().await, Err(Error::Cancelled)));
+        Ok::<_, ScopeError<Error>>(())
+    }).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built image, matching static driver and Docker"]
+async fn terminal_pipe_input_unread_bytes_and_signal_are_observable()
+-> Result<(), Box<dyn std::error::Error>> {
+    use caseyard::{TerminalChannel, TerminalOptions, TerminalSignal, TerminalStatus};
+    with_environment(IMAGE, |env| async move {
+        install_test_driver(&env)
+            .await
+            .map_err(ScopeError::Infrastructure)?;
+        let observed = env
+            .with_terminal(
+                Command::new(["sh", "-c", "printf ready >&2; exit 7"]),
+                TerminalOptions {
+                    input: Some(vec![0, 255, 4]),
+                    ..Default::default()
+                },
+                |session| async move {
+                    session
+                        .expect(TerminalChannel::Terminal, b"ready", Duration::from_secs(5))
+                        .await?;
+                    assert!(matches!(
+                        session.send(b"not pipe input").await,
+                        Err(Error::Driver { .. })
+                    ));
+                    session.wait(Duration::from_secs(5)).await
+                },
+            )
+            .await?;
+        assert_eq!(observed.status, TerminalStatus::Exited { code: 7 });
+        assert_eq!(observed.unread_input, [0, 255, 4]);
+        assert!(observed.stdout.is_empty());
+        let observed = env
+            .with_terminal(
+                Command::new(["sh", "-c", "printf ready >&2; exec sleep infinity"]),
+                TerminalOptions::default(),
+                |session| async move {
+                    session
+                        .expect(TerminalChannel::Terminal, b"ready", Duration::from_secs(5))
+                        .await?;
+                    session.signal(TerminalSignal::Terminate).await?;
+                    session.wait(Duration::from_secs(5)).await
+                },
+            )
+            .await?;
+        assert_eq!(observed.status, TerminalStatus::Signaled { signal: 15 });
+        Ok::<_, ScopeError<Error>>(())
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built image, matching static driver and Docker"]
+async fn terminal_callback_failure_closes_process_and_socket() -> Result<(), ScopeError<Error>> {
+    use caseyard::{TerminalChannel, TerminalOptions};
+    with_environment(IMAGE, |env| async move {
+        install_test_driver(&env).await?;
+        let outcome = env
+            .with_terminal(
+                Command::new([
+                    "sh",
+                    "-c",
+                    "echo $$ > /workspace/terminal-pid; printf ready >&2; exec sleep infinity",
+                ]),
+                TerminalOptions::default(),
+                |session| async move {
+                    session
+                        .expect(TerminalChannel::Terminal, b"ready", Duration::from_secs(5))
+                        .await?;
+                    Err::<(), _>(Error::Assertion("intentional callback failure".into()))
+                },
+            )
+            .await;
+        assert!(matches!(
+            outcome,
+            Err(ScopeError::Callback(Error::Assertion(_)))
+        ));
+        let alive = env
+            .run(Command::new([
+                "sh",
+                "-c",
+                "kill -0 \"$(cat /workspace/terminal-pid)\" 2>/dev/null",
+            ]))
+            .await?;
+        assert_eq!(alive.exit_code, 1);
+        env.check_command(
+            Command::new(["find", "/tmp", "-maxdepth", "1", "-name", "caseyard-pty-*"]),
+            CommandResult::default(),
+        )
+        .await
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built image, matching static driver and Docker"]
+async fn terminal_future_drop_closes_process_and_escaped_handle() -> Result<(), ScopeError<Error>> {
+    use caseyard::{TerminalChannel, TerminalOptions};
+    with_environment(IMAGE, |env| async move {
+        install_test_driver(&env).await?;
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let mut scope = Box::pin(env.with_terminal(
+            Command::new([
+                "sh",
+                "-c",
+                "echo $$ > /workspace/terminal-pid; printf ready >&2; exec sleep infinity",
+            ]),
+            TerminalOptions::default(),
+            |session| async move {
+                session
+                    .expect(TerminalChannel::Terminal, b"ready", Duration::from_secs(5))
+                    .await?;
+                send.send(session).map_err(|_| Error::Cancelled)?;
+                std::future::pending::<Result<(), Error>>().await
+            },
+        ));
+        let escaped = tokio::select! {
+            result = &mut scope => panic!("terminal scope unexpectedly returned: {result:?}"),
+            result = receive => result.map_err(|_| Error::Cancelled)?,
+        };
+        drop(scope);
+        assert!(matches!(escaped.observe().await, Err(Error::Cancelled)));
+        // The Drop fallback is asynchronous. Poll the owned PID until close completes.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let alive = env
+                    .run(Command::new([
+                        "sh",
+                        "-c",
+                        "kill -0 \"$(cat /workspace/terminal-pid)\" 2>/dev/null",
+                    ]))
+                    .await?;
+                if alive.exit_code == 1 {
+                    break Ok::<_, Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| Error::Deadline)??;
+        env.check_command(
+            Command::new(["find", "/tmp", "-maxdepth", "1", "-name", "caseyard-pty-*"]),
+            CommandResult::default(),
+        )
+        .await
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built image, matching static driver and Docker"]
+async fn terminal_panic_is_resumed_after_process_cleanup() -> Result<(), ScopeError<Error>> {
+    use caseyard::{TerminalChannel, TerminalOptions};
+    use futures_util::FutureExt;
+    with_environment(IMAGE, |env| async move {
+        install_test_driver(&env).await?;
+        let scope = env.with_terminal(
+            Command::new([
+                "sh",
+                "-c",
+                "echo $$ > /workspace/terminal-pid; printf ready >&2; exec sleep infinity",
+            ]),
+            TerminalOptions::default(),
+            |session| async move {
+                session
+                    .expect(TerminalChannel::Terminal, b"ready", Duration::from_secs(5))
+                    .await?;
+                std::panic::panic_any(123_u32);
+                #[allow(unreachable_code)]
+                Ok::<_, Error>(())
+            },
+        );
+        let Err(payload) = std::panic::AssertUnwindSafe(scope).catch_unwind().await else {
+            panic!("expected original terminal callback panic")
+        };
+        assert_eq!(payload.downcast_ref::<u32>(), Some(&123));
+        let alive = env
+            .run(Command::new([
+                "sh",
+                "-c",
+                "kill -0 \"$(cat /workspace/terminal-pid)\" 2>/dev/null",
+            ]))
+            .await?;
+        assert_eq!(alive.exit_code, 1);
+        env.check_command(
+            Command::new(["find", "/tmp", "-maxdepth", "1", "-name", "caseyard-pty-*"]),
+            CommandResult::default(),
+        )
+        .await
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "requires caller-built nonroot image, matching static driver and Docker"]
+async fn nonroot_driver_installation_snapshot_and_terminal()
+-> Result<(), Box<dyn std::error::Error>> {
+    use caseyard::{PathState, TerminalOptions, TerminalStatus};
+    with_environment("e2e-example-nonroot:local", |env| async move {
+        install_test_driver(&env)
+            .await
+            .map_err(ScopeError::Infrastructure)?;
+        let uid = env
+            .run(Command::new(["id", "-u"]))
+            .await
+            .map_err(ScopeError::Infrastructure)?;
+        assert_ne!(uid.stdout, b"0\n");
+        let baseline = env
+            .snapshot(["/tmp/caseyard-nonroot-missing"])
+            .await
+            .map_err(ScopeError::Infrastructure)?;
+        assert_eq!(
+            baseline.entries["/tmp/caseyard-nonroot-missing"],
+            PathState::Missing
+        );
+        let observed = env
+            .with_terminal(
+                Command::new(["printf", "nonroot"]),
+                TerminalOptions::default(),
+                |session| async move { session.wait(Duration::from_secs(5)).await },
+            )
+            .await?;
+        assert_eq!(observed.stdout, b"nonroot");
+        assert_eq!(observed.status, TerminalStatus::Exited { code: 0 });
+        Ok::<_, ScopeError<Error>>(())
+    })
+    .await?;
+    Ok(())
 }
 
 #[tokio::test]

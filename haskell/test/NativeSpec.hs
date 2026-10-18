@@ -7,9 +7,11 @@ import Control.Concurrent.Async
 import Control.Concurrent.MVar
 import Control.Exception hiding (AssertionFailed)
 import Control.Monad (forM_, void)
+import Data.Aeson.Types (Pair)
 import Data.Aeson hiding (Result)
 import qualified Codec.Archive.Tar as Tar
 import qualified Codec.Archive.Tar.Entry as Tar
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B8
@@ -21,9 +23,9 @@ import GHC.Clock (getMonotonicTimeNSec)
 import qualified Network.Socket.ByteString as NSB
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Timeout (timeout)
-import Test.Hspec
+import Test.Hspec hiding (before, after)
 import Test.CLI.E2E
-import Test.CLI.E2E.Internal (Environment(..), Deadline(..), demux, validateCommand, withEngineHost)
+import Test.CLI.E2E.Internal (Environment(..), Driver(..), Deadline(..), demux, validateCommand, withEngineHost)
 import Fixture
 
 spec :: Spec
@@ -165,6 +167,180 @@ spec = do
         checkSymlink e "/link" "/resolved/relative" `shouldThrow` assertionFailure
     it "rejects probe code 2 as infrastructure failure" $
       withCommands (const (Result 2 "" "bad probe")) $ \e -> checkMissing e "/path" `shouldThrow` infrastructure
+  describe "driver installation" $ do
+    it "transfers exact executable bytes without chmod on a root-owned archive entry" $ do
+      uploaded <- newEmptyMVar
+      let directory = "/tmp/caseyard-driver-Ab123"
+          handler incoming socket
+            | verb incoming == "PUT" = putMVar uploaded incoming >> respond socket 200 ""
+            | target incoming == "/containers/c/exec" = respond socket 201 "{\"Id\":\"e\"}"
+            | target incoming == "/exec/e/start" = respond socket 200 (frame 1 (directory <> "\n"))
+            | otherwise = respond socket 200 "{\"Running\":false,\"ExitCode\":0}"
+      withServer handler $ \host -> withTestEnvironment host 1000000000 $ \e -> do
+        Driver _ executable <- installDriver e (BS.pack [0,255,10])
+        executable `shouldBe` "/tmp/caseyard-driver-Ab123/driver"
+        incoming <- takeMVar uploaded
+        target incoming `shouldBe` "/containers/c/archive?path=%2Ftmp%2Fcaseyard-driver-Ab123"
+        case Tar.read (LBS.fromStrict (payload incoming)) of
+          Tar.Next entry Tar.Done -> do
+            Tar.entryPermissions entry `shouldBe` 0o755
+            Tar.entryContent entry `shouldBe` Tar.NormalFile (LBS.pack [0,255,10]) 3
+          archive -> expectationFailure (show archive)
+        installDriver e "another binary" `shouldThrow` invalidInput
+    it "rejects empty binary bytes before transport" $
+      withTestEnvironment "http://127.0.0.1:1" 1000000000 $ \e -> installDriver e "" `shouldThrow` invalidInput
+    forM_ ["/arbitrary/path\n", "/tmp/caseyard-driver-../bad\n", "/tmp/caseyard-driver-\n", "one\ntwo\n"] $ \directory ->
+      it ("rejects invalid directory response: " ++ show directory) $
+        withExec (frame 1 directory) 0 $ \e -> installDriver e "binary" `shouldThrow` infrastructure
+  describe "filesystem snapshots" $ do
+    it "captures only explicit paths with exact file bytes and literal dangling links" $ do
+      let bytes = BS.pack [0,255,13,10]
+          entries = [("/bytes", RegularFile bytes), ("/dir", Directory),
+            ("/link", Symlink (BS.pack [255,10])), ("/missing", Missing)]
+      withCommands (const (snapshotReply entries)) $ \e -> do
+        captured <- captureSnapshot (Driver e "/driver") ["/missing", "/link", "/dir", "/bytes", "/bytes"]
+        captured `shouldBe` FileSystemSnapshot (Map.fromList entries)
+        checkSnapshot (Driver e "/driver") captured
+    it "reports sorted existence, kind, exact content and literal target changes" $ do
+      let before = FileSystemSnapshot (Map.fromList
+            [("/d", Symlink "relative"), ("/b", Directory), ("/a", Missing), ("/c", RegularFile (BS.pack [0,255]))])
+          after = FileSystemSnapshot (Map.fromList
+            [("/c", RegularFile (BS.pack [0,254])), ("/a", RegularFile ""), ("/d", Symlink "/relative"), ("/b", Symlink "directory")])
+      diffSnapshots before after `shouldBe`
+        [ SnapshotDifference "/a" ExistenceChanged (Just Missing) (Just (RegularFile ""))
+        , SnapshotDifference "/b" KindChanged (Just Directory) (Just (Symlink "directory"))
+        , SnapshotDifference "/c" ContentChanged (Just (RegularFile (BS.pack [0,255]))) (Just (RegularFile (BS.pack [0,254])))
+        , SnapshotDifference "/d" TargetChanged (Just (Symlink "relative")) (Just (Symlink "/relative"))
+        ]
+      diffSnapshots before before `shouldBe` []
+    it "does not confuse an unselected path with an observed missing path" $
+      diffSnapshots (FileSystemSnapshot Map.empty) (FileSystemSnapshot (Map.singleton "/absent" Missing))
+        `shouldBe` [SnapshotDifference "/absent" ExistenceChanged Nothing (Just Missing)]
+    forM_ [Result 1 "" "permission denied", Result 1 "" "not a directory", Result 1 "" "unsupported physical path kind",
+           Result 0 "invalid JSON" "", Result 0 "{\"kind\":\"socket\"}" "", Result 0 "{\"kind\":\"symlink\"}" ""] $ \failure ->
+      it ("fails instead of recording absence for " ++ show failure) $
+        withCommands (const failure) $ \e -> captureSnapshot (Driver e "/driver") ["/path"] `shouldThrow` infrastructure
+    it "propagates file read failures rather than recording missing" $
+      withCommands (const (Result 1 "{\"ok\":false,\"error\":\"file read failed\",\"observation\":null}" "")) $ \e ->
+        captureSnapshot (Driver e "/driver") ["/file"] `shouldThrow` infrastructure
+    it "checks without changing the expected snapshot" $
+      withCommands (const (snapshotReply [("/file", Missing)])) $ \e -> do
+        let expected = FileSystemSnapshot (Map.singleton "/file" (RegularFile "original"))
+        checkSnapshot (Driver e "/driver") expected `shouldThrow` assertionFailure
+        expected `shouldBe` FileSystemSnapshot (Map.singleton "/file" (RegularFile "original"))
+    forM_ [snapshotReply [], snapshotReply [("/path", Missing), ("/path", Missing)],
+           snapshotReply [("/unselected", Missing)],
+           Result 0 "{\"ok\":true,\"value\":[{\"path\":\"/path\",\"kind\":\"file\",\"data\":[256],\"target\":[]}]}" ""] $ \malformed ->
+      it ("rejects incomplete, duplicate, unexpected or invalid-byte snapshots " ++ show malformed) $
+        withCommands (const malformed) $ \e -> captureSnapshot (Driver e "/driver") ["/path"] `shouldThrow` infrastructure
+    forM_ ["", "/bad\0path", "/link/"] $ \path ->
+      it ("rejects invalid snapshot path before transport: " ++ show path) $
+        withTestEnvironment "http://127.0.0.1:1" 1000000000 $ \e ->
+          captureSnapshot (Driver e "/driver") [path] `shouldThrow` invalidInput
+  describe "scoped terminals" $ do
+    it "preserves raw observations and sends typed session operations through the shared driver" $ do
+      requests <- newMVar []
+      let reply request = do
+            modifyMVar_ requests (pure . (++ [request]))
+            pure (terminalReply request)
+          options = TerminalOptions 24 80 (Just (BS.pack [0,255,10])) 12
+          observed = TerminalObservation (BS.pack [0,255]) "\ESC[0m" (BS.pack [10,255])
+            (TerminalExited 7) True [TermiosInteger 1, TermiosArray [TermiosInteger 2]] [TermiosInteger 1, TermiosArray [TermiosInteger 2]]
+      withTerminalReplies reply $ \e -> do
+        withTerminal e (Command ["app", "", "two words"] (Just "/workspace") ["EMPTY="]) options $ \terminal -> do
+          observeTerminal terminal `shouldReturn` observed
+          expectTerminal terminal TerminalOutput "prompt" 2 `shouldReturn` observed
+          sendTerminal terminal (BS.pack [3,4]) `shouldReturn` observed
+          resizeTerminal terminal 1 2 `shouldReturn` observed
+          signalTerminal terminal Interrupt `shouldReturn` observed
+          waitTerminal terminal 3 `shouldReturn` observed
+        events <- readMVar requests
+        events `shouldBe`
+          [ ("start", object ["argv" .= (["app", "", "two words"] :: [String]), "rows" .= (24 :: Int),
+              "columns" .= (80 :: Int), "input" .= ([0,255,10] :: [Int]), "timeout" .= (12 :: Double)])
+          , ("request", terminalRequest "observe" [])
+          , ("request", terminalRequest "expect" ["channel" .= ("terminal" :: String), "data" .= ([112,114,111,109,112,116] :: [Int]), "timeout" .= (2 :: Double)])
+          , ("request", terminalRequest "send" ["data" .= ([3,4] :: [Int])])
+          , ("request", terminalRequest "resize" ["rows" .= (1 :: Int), "columns" .= (2 :: Int)])
+          , ("request", terminalRequest "signal" ["name" .= ("SIGINT" :: String)])
+          , ("request", terminalRequest "wait" ["timeout" .= (3 :: Double)])
+          , ("request", terminalRequest "close" [])
+          ]
+    it "rejects a retained session handle once its callback has returned" $
+      withTerminalReplies (pure . terminalReply) $ \e -> do
+        terminal <- withTerminal e (Command ["app"] Nothing []) defaultTerminalOptions pure
+        observeTerminal terminal `shouldThrow` invalidInput
+    it "preserves the caller failure and closes its session" $ do
+      requests <- newMVar []
+      original <- newIORef ()
+      withTerminalReplies (\request -> modifyMVar_ requests (pure . (++ [request])) >> pure (terminalReply request)) $ \e -> do
+        withTerminal e (Command ["app"] Nothing []) defaultTerminalOptions (\_ -> throwIO (CallerFailure original))
+          `shouldThrow` (\(CallerFailure actual) -> actual == original)
+      events <- readMVar requests
+      map (\(_, value) -> case value of Object fields -> KM.lookup "operation" fields; _ -> Nothing) events
+        `shouldBe` [Nothing, Just (String "close")]
+    it "preserves asynchronous cancellation and closes its session" $ do
+      closed <- newEmptyMVar
+      withTerminalReplies (\request -> do
+        whenClose request (putMVar closed ())
+        pure (terminalReply request)) $ \e -> do
+          withTerminal e (Command ["app"] Nothing []) defaultTerminalOptions (\_ -> throwIO ThreadKilled)
+            `shouldThrow` (== ThreadKilled)
+          takeMVar closed
+    it "reports cleanup failure when the callback succeeds" $
+      withTerminalReplies (\request -> pure (if isClose request then terminalFailure else terminalReply request)) $ \e ->
+        withTerminal e (Command ["app"] Nothing []) defaultTerminalOptions (const (pure ())) `shouldThrow` cleanupFailure
+    it "preserves the caller failure when close also fails" $ do
+      original <- newIORef ()
+      withTerminalReplies (\request -> pure (if isClose request then terminalFailure else terminalReply request)) $ \e ->
+        withTerminal e (Command ["app"] Nothing []) defaultTerminalOptions (\_ -> throwIO (CallerFailure original))
+          `shouldThrow` (\(CallerFailure actual) -> actual == original)
+    it "retains complete observations on expected-byte failure" $
+      withTerminalReplies (\request -> pure (case request of
+        ("start", _) -> terminalReply request
+        _ | isClose request -> terminalReply request
+        _ -> Result 1 (LBS.toStrict (encode (object ["ok" .= False, "error" .= ("waiting for stdout bytes" :: String),
+               "observation" .= terminalObservationValue]))) "")) $ \e ->
+        withTerminal e (Command ["app"] Nothing []) defaultTerminalOptions (\terminal ->
+          expectTerminal terminal StandardOutput "missing" 1 `shouldThrow`
+            (\failure -> case failure of
+              TerminalFailed message observation -> message == "waiting for stdout bytes" &&
+                fmap terminalStdout observation == Just (BS.pack [0,255])
+              _ -> False))
+    it "preserves partial watchdog output without inventing process or termios state" $
+      withTerminalReplies (\request -> pure (case request of
+        ("start", _) -> terminalReply request
+        _ | isClose request -> terminalReply request
+        _ -> Result 1 "{\"ok\":false,\"error\":\"watchdog expired\",\"observation\":{\"stdout\":[0,255],\"terminal\":[27,91]}}" "")) $ \e ->
+          withTerminal e (Command ["app"] Nothing []) defaultTerminalOptions (\terminal ->
+            observeTerminal terminal `shouldThrow` (\failure -> case failure of
+              TerminalPartialFailure message out term -> message == "watchdog expired" && out == BS.pack [0,255] && term == BS.pack [27,91]
+              _ -> False))
+    forM_ [object ["stdout" .= ([256] :: [Int])], object ["stdout" .= ([-1] :: [Int])],
+           object ["stdout" .= ([1.5] :: [Double])], object ["status" .= object ["kind" .= ("unknown" :: String)]],
+           object ["status" .= object ["kind" .= ("running" :: String), "code" .= (7 :: Int)]],
+           object ["status" .= object ["kind" .= ("exited" :: String), "code" .= (0 :: Int), "signal" .= (2 :: Int)]],
+           object ["status" .= object ["kind" .= ("signaled" :: String), "signal" .= (2 :: Int), "code" .= (0 :: Int)]]] $ \invalid ->
+      it ("rejects malformed terminal observations " ++ show invalid) $
+        withTerminalReplies (\request -> pure (case request of
+          ("start", _) -> terminalReply request
+          _ | isClose request -> terminalReply request
+          _ -> Result 0 (LBS.toStrict (encode (object ["ok" .= True, "value" .= overrideObservation invalid]))) "")) $ \e ->
+            withTerminal e (Command ["app"] Nothing []) defaultTerminalOptions (\terminal ->
+              observeTerminal terminal `shouldThrow` infrastructure)
+    forM_ [defaultTerminalOptions { terminalRows = 0 }, defaultTerminalOptions { terminalColumns = 65536 },
+           defaultTerminalOptions { terminalTimeout = 0 }, defaultTerminalOptions { terminalTimeout = 0/0 },
+           defaultTerminalOptions { terminalTimeout = 1/0 }] $ \options ->
+      it ("rejects invalid terminal options before transport " ++ show options) $
+        withTestEnvironment "http://127.0.0.1:1" 1000000000 $ \e ->
+          withTerminal (Driver e "/driver") (Command ["app"] Nothing []) options (const (pure ())) `shouldThrow` invalidInput
+    it "rejects empty expectations and invalid operation sizes and timeouts" $
+      withTerminalReplies (pure . terminalReply) $ \e ->
+        withTerminal e (Command ["app"] Nothing []) defaultTerminalOptions $ \terminal -> do
+          expectTerminal terminal StandardOutput "" 1 `shouldThrow` invalidInput
+          expectTerminal terminal TerminalOutput "x" 0 `shouldThrow` invalidInput
+          resizeTerminal terminal 0 20 `shouldThrow` invalidInput
+          waitTerminal terminal 61 `shouldThrow` invalidInput
   describe "scoped environment lifecycle" $ do
     it "returns the callback value after removing its fresh container and lease" $
       withDaemon False False $ \host resources requests -> withDockerHost host $ do
@@ -272,7 +448,8 @@ decodeChunks bytes = do
 withTestEnvironment :: String -> Word -> (Environment -> IO a) -> IO a
 withTestEnvironment host duration action = withEngineHost host $ \engine -> do
   now <- getMonotonicTimeNSec
-  action (Environment engine "c" (Deadline (now + fromIntegral duration)))
+  installed <- newIORef False
+  action (Environment engine "c" (Deadline (now + fromIntegral duration)) installed)
 withExec :: BS.ByteString -> Int -> (Environment -> IO a) -> IO a
 withExec bytes code action = withServer handler $ \host -> withTestEnvironment host 1000000000 action
   where
@@ -282,15 +459,22 @@ withExec bytes code action = withServer handler $ \host -> withTestEnvironment h
       | otherwise = respond socket 200 (LBS.toStrict (encode (object ["Running" .= False, "ExitCode" .= code])))
 
 withCommands :: ([String] -> Result) -> (Environment -> IO a) -> IO a
-withCommands answer use = do
+withCommands answer = withCommandArchives answer Map.empty
+
+withCommandArchives :: ([String] -> Result) -> Map.Map BS.ByteString BS.ByteString -> (Environment -> IO a) -> IO a
+withCommandArchives answer = withCommandEffects (pure . answer)
+
+withCommandEffects :: ([String] -> IO Result) -> Map.Map BS.ByteString BS.ByteString -> (Environment -> IO a) -> IO a
+withCommandEffects answer archives use = do
   current <- newMVar (Result 0 "" "")
   let handler incoming socket
+        | Just archive <- Map.lookup (target incoming) archives = respond socket 200 archive
         | target incoming == "/containers/c/exec" =
             case decodeStrict' (payload incoming) of
               Just (Object config) -> case KM.lookup "Cmd" config of
                 Just (Array values) -> do
                   let argv = [T.unpack value | String value <- foldr (:) [] values]
-                  modifyMVar_ current (const (pure (answer argv)))
+                  modifyMVar_ current (const (answer argv))
                   respond socket 201 "{\"Id\":\"e\"}"
                 _ -> respond socket 400 "invalid command"
               _ -> respond socket 400 "invalid json"
@@ -305,6 +489,56 @@ withCommands answer use = do
 data CallerFailure = CallerFailure (IORef ())
 instance Show CallerFailure where show _ = "CallerFailure"
 instance Exception CallerFailure
+
+snapshotReply :: [(FilePath, SnapshotEntry)] -> Result
+snapshotReply entries = Result 0 (LBS.toStrict (encode (object ["ok" .= True, "value" .= map entryValue entries]))) ""
+  where
+    entryValue (path, entry) = object ["path" .= path, "kind" .= kind, "data" .= BS.unpack bytes, "target" .= BS.unpack targetBytes]
+      where
+        (kind, bytes, targetBytes) = case entry of
+          Missing -> ("missing" :: String, BS.empty, BS.empty)
+          RegularFile contents -> ("file", contents, BS.empty)
+          Directory -> ("directory", BS.empty, BS.empty)
+          Symlink targetBytes' -> ("symlink", BS.empty, targetBytes')
+
+terminalObservationValue :: Value
+terminalObservationValue = object
+  [ "stdout" .= ([0,255] :: [Int]), "terminal" .= ([27,91,48,109] :: [Int])
+  , "unreadInput" .= ([10,255] :: [Int]), "status" .= object ["kind" .= ("exited" :: String), "code" .= (7 :: Int)]
+  , "termiosRestored" .= True, "initialTermios" .= termios, "currentTermios" .= termios
+  ]
+  where termios = [Number 1, toJSON ([2] :: [Int])]
+
+overrideObservation :: Value -> Value
+overrideObservation (Object fields) = case terminalObservationValue of
+  Object defaults -> Object (KM.union fields defaults)
+  _ -> Object fields
+overrideObservation other = other
+
+terminalRequest :: String -> [Pair] -> Value
+terminalRequest operation fields = object (["path" .= ("/tmp/session/socket" :: String), "operation" .= operation] ++ fields)
+terminalReply :: (String, Value) -> Result
+terminalReply request@(mode, _) = Result 0 (LBS.toStrict (encode (object ["ok" .= True, "value" .= value]))) ""
+  where value
+          | mode == "start" = object ["path" .= ("/tmp/session/socket" :: String)]
+          | isClose request = Null
+          | otherwise = terminalObservationValue
+terminalFailure :: Result
+terminalFailure = Result 1 "{\"ok\":false,\"error\":\"close failure\",\"observation\":null}" ""
+isClose :: (String, Value) -> Bool
+isClose (_, Object fields) = KM.lookup "operation" fields == Just (String "close")
+isClose _ = False
+whenClose :: (String, Value) -> IO () -> IO ()
+whenClose request action = if isClose request then action else pure ()
+
+withTerminalReplies :: ((String, Value) -> IO Result) -> (Driver -> IO a) -> IO a
+withTerminalReplies answer use = withCommandEffects respondTo Map.empty (\environment -> use (Driver environment "/driver"))
+  where
+    respondTo argv = case argv of
+      ["/driver", mode, body] -> case eitherDecodeStrict' (TE.encodeUtf8 (T.pack body)) of
+        Right value -> answer (mode, value)
+        Left err -> throwIO (userError err)
+      _ -> throwIO (userError ("unexpected driver argv: " ++ show argv))
 
 withDockerHost :: String -> IO a -> IO a
 withDockerHost host use = bracket (mapM remember variables) (mapM_ restore) $ \_ -> do

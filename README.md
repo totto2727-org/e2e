@@ -31,6 +31,31 @@ Use the selected implementation's setup instructions to add the library to your 
 The implementations can be consumed separately; JavaScript tools are not required to use the Go, Haskell, or Rust libraries.
 No package publication or release is implied by the implementation table.
 
+### Static driver for snapshots and terminals
+
+Snapshot and terminal APIs require a caller-supplied Caseyard driver executable.
+Build it once for the Linux architecture of the application image, then read the binary into bytes and install it through the language's public driver API inside each environment scope.
+The SDK transfers the executable after container startup and gives it a private path and executable mode.
+Neither Python nor Go is required inside the application image.
+The language packages do not embed binaries or download executable code.
+
+With Go installed, build from a Caseyard checkout:
+
+```sh
+cd go
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o target/driver-linux-arm64 ./cmd/caseyard-driver
+```
+
+Use `GOARCH=amd64` and the corresponding output name for an x86-64 container.
+Select the container architecture, which can differ from the host or Engine architecture when emulation is used.
+Match the driver source revision to the SDK revision.
+Only execute a driver built from trusted source.
+A wrong architecture or incompatible driver is an error, not an automatic download or interpreter fallback.
+The image must provide `mktemp` and an executable, writable `/tmp` directory.
+The SDK transfers the helper with executable permissions into a private directory, including when the image uses a non-root user.
+Terminal sessions also require Linux PTYs through `/dev/ptmx` and `/dev/pts`.
+See the language guides for installation calls and complete examples.
+
 ## Purpose and boundaries
 
 Exercise the real executable through argv commands and observable output or filesystem state.
@@ -40,7 +65,8 @@ Build the application image before testing.
 Image pull policies and backend infrastructure images, such as Testcontainers' resource reaper, are documented in each language README.
 Commands are argv entries, not shell strings.
 Shell syntax requires an explicit shell command.
-There is no generic application-readiness check or interactive terminal support.
+There is no generic application-readiness check.
+Optional terminal sessions provide real PTY interaction through the caller-supplied static driver.
 
 ## Shared values
 
@@ -76,6 +102,48 @@ These names identify behaviors, not mandatory spellings in every language.
 | Check symbolic link | Compare the literal target without resolving or normalizing it. A dangling target is valid.                                         |
 
 Path-probe exit codes other than `0` or `1` are infrastructure errors, not successful absence checks.
+
+### File-state snapshots
+
+Capture an explicit set of container paths before an operation, then compare those paths with the saved state.
+Snapshots distinguish missing paths, physical regular files, physical directories, and symbolic links, including dangling links.
+File contents and literal link targets are compared as exact bytes.
+JSON whitespace and different literal targets that resolve to the same file still count as changes.
+Differences identify each path and its existence, kind, content, or target change in deterministic order.
+
+A directory entry records its kind, not its descendants.
+Snapshots do not include permissions, ownership, timestamps, or inode numbers.
+Add each descendant path explicitly when its state matters.
+Acquisition is not atomic across paths or concurrent application writes.
+Synchronize the application operation before comparison.
+Read failures and unsupported path kinds are errors, never successful missing-path or unchanged-state observations.
+Capture and comparison do not update expected values or application content.
+
+### Terminal sessions
+
+Start a scoped terminal session with explicit argv, working directory, environment, and terminal dimensions.
+Stdin and stderr use a real PTY, while stdout remains a separate byte stream.
+An alternative stdin mode supplies finite pipe bytes and EOF while stderr still uses the terminal.
+The result exposes unread pipe input after child exit.
+
+Wait for literal output bytes before sending input.
+Matches span read boundaries and consume output through the matched bytes, so repeated prompts cannot reuse an earlier match.
+Each channel has a separate match position, and ordering between channels is not defined.
+Send raw bytes, resize the terminal with `SIGWINCH`, or send an external process-group signal.
+Ctrl-C and Ctrl-D input are bytes, not aliases for an external signal or transport closure.
+
+Observations preserve raw stdout and terminal bytes, process status, and normalized termios state.
+Normal exit and signal termination are distinct results.
+Screen and cursor restoration assertions remain in the consumer test, using the raw control sequences.
+File checks and snapshots can run between terminal operations while the child is still running.
+Use sequential session operations and bounded waits rather than fixed sleeps as readiness checks.
+
+Each terminal has an additional watchdog of at most one minute, with a default of fifty seconds.
+It does not extend the environment's operation budget.
+Leaving a terminal scope attempts to kill its process group, reap the child, and remove its descriptors and control socket.
+The container remains the final cleanup boundary on environment cancellation or transport failure.
+If the image's PID 1 does not reap adopted processes, an exited session server can remain as a zombie until container teardown.
+Language guides describe their scope-cancellation and partial-output limits.
 
 ## Lifecycle, deadlines, and cancellation
 
