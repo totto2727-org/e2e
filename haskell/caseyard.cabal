@@ -4,6 +4,8 @@ version: 0.1.0.0
 synopsis: Isolated CLI tests against a local Docker Engine
 description: Run independently named CLI cases in disposable containers using a caller-built local image.
 category: Testing
+license: MIT
+license-file: LICENSE
 extra-source-files: README.md, e2e/CLISpec.md
 build-type: Simple
 

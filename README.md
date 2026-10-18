@@ -117,4 +117,4 @@ For repository setup, toolchains, architecture constraints, and validation comma
 
 ## License
 
-No license has been declared for this repository.
+[MIT](./LICENSE).

@@ -165,7 +165,7 @@ Go's framework controls parallelism through `t.Parallel` and `-parallel`.
 `cabal.project` supplies warnings-as-errors and direct test reporting.
 Each spec module exports `spec :: Spec`; one-line `Spec.hs` entrypoints use the declared `hspec-discover` build tool.
 Cabal can download that tool on first build; use `--offline` only with the required dependencies already cached.
-The checkout declares no license or release maintainer, so `cabal check` excludes only those publication metadata checks.
+No release maintainer is declared, so `cabal check` excludes only that publication metadata check.
 Do not weaken dependency bounds or introduce `allow-newer` for local tooling.
 
 ### TypeScript
@@ -193,7 +193,7 @@ Run CI separately before publishing.
 | crates.io | `caseyard`            | Crate ownership and the `CARGO_REGISTRY_TOKEN` repository secret.                      |
 
 Confirm registry name availability and complete any first-publication setup before starting the workflow.
-No license has been selected for this repository; resolve the distribution terms before the first publication.
+Use the MIT license for all language packages and include its text in published artifacts.
 Do not run the publish workflow during validation.
 The private workspace packages are orchestration wrappers, not publication targets.
 
