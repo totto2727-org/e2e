@@ -45,7 +45,7 @@ Docker must be available for explicit E2E execution.
 ```sh
 nix develop
 vp install --frozen-lockfile
-just --working-directory haskell setup
+just --justfile haskell/Justfile setup
 vp run -r ci
 ```
 
