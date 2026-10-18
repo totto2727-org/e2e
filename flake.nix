@@ -46,8 +46,6 @@
           ];
           rustTools = [ pkgs.rustup ];
           haskellTools = [
-            pkgs.ghc
-            pkgs.cabal-install
             pkgs.haskellPackages.hpack
             pkgs.zlib
             pkgs.pkg-config

@@ -16,7 +16,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
       - uses: totto2727-org/monorepo/.github/actions/setup-typescript@main
-      - uses: totto2727-org/monorepo/.github/actions/setup-haskell@main
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.10.3'
+          cabal-version: '3.16.1.0'
       - name: Verify workspace task graph
         run: |
           eval "$(nix print-dev-env "$GITHUB_WORKSPACE")"

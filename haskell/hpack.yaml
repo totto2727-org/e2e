@@ -10,7 +10,7 @@ build-type: Simple
 verbatim:
   cabal-version: '3.0'
 extra-source-files:
-  - package.yaml
+  - hpack.yaml
   - README.md
   - e2e/CLISpec.md
 
@@ -32,31 +32,17 @@ dependencies:
 library:
   source-dirs: src
   exposed-modules: Test.CLI.E2E
-  other-modules:
-    - Test.CLI.E2E.Internal
-    - Test.CLI.E2E.Terminal
 
 tests:
   native:
     main: Spec.hs
     source-dirs: [test, src]
-    other-modules:
-      - NativeSpec
-      - Fixture
-      - Test.CLI.E2E
-      - Test.CLI.E2E.Internal
-      - Test.CLI.E2E.Terminal
     build-tools: hspec-discover:hspec-discover >=2.10 && <2.12
     dependencies: hspec >=2.10 && <2.12
     ghc-options: -threaded
   docker-e2e:
     main: Spec.hs
     source-dirs: [e2e, src]
-    other-modules:
-      - CLISpec
-      - Test.CLI.E2E
-      - Test.CLI.E2E.Internal
-      - Test.CLI.E2E.Terminal
     build-tools: hspec-discover:hspec-discover >=2.10 && <2.12
     dependencies: hspec >=2.10 && <2.12
     ghc-options: -threaded
