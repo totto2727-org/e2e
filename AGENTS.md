@@ -35,7 +35,7 @@ Do not retain dated verification reports, migration tables, or progress logs in 
 
 Run root tasks from the repository root.
 Enter `nix develop` for repository tools, or select `nix develop .#go`, `.#haskell`, `.#typescript`, or `.#rust` for standalone native work.
-Nix provides GHC, Cabal, and native build dependencies such as zlib.
+Nix provides GHC, Cabal, hpack, and native build dependencies such as zlib.
 Cabal owns Haskell library dependencies.
 Nix provides `rustup`.
 `rust/rust-toolchain.toml` owns the Rust toolchain and components.
@@ -183,6 +183,10 @@ Go's framework controls parallelism through `t.Parallel` and `-parallel`.
 
 ### Haskell
 
+The target toolchain policy is to manage GHC and Cabal with ghcup, while Cabal owns package dependencies and hpack generates package metadata.
+The current Nix-provided GHC and Cabal remain in use until that toolchain migration is implemented and validated separately.
+Edit `haskell/package.yaml` and run `just generate` in `haskell/` to regenerate `caseyard.cabal` with hpack.
+Commit both manifests so Cabal consumers do not need hpack.
 `just ci` in `haskell/` runs Cabal builds, manifest checks, and native Hspec tests.
 `cabal.project` supplies warnings-as-errors and direct test reporting.
 Each spec module exports `spec :: Spec`; one-line `Spec.hs` entrypoints use the declared `hspec-discover` build tool.
