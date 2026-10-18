@@ -17,7 +17,7 @@ Use the [shared contract](../../../README.md) and its language-guide links for s
 ## Scenario design
 
 - Start with the behavior the consumer needs to verify, not a list of SDK methods to exercise.
-- Use the environment helper to execute the real CLI and observe its output or filesystem state. A helper call is an operation, not the scenario's purpose.
+- Use the environment helper to execute the real CLI and observe its output or filesystem state. Use the test framework's standard matchers for verdicts and saved snapshots. A helper call is an operation, not the scenario's purpose.
 - State the initial conditions, the ordered actions, and the observations that establish success.
 - Keep actions that depend on shared state in one scenario. Do not make one scenario depend on another scenario's execution order.
 - Distinguish application results, including expected nonzero exits, from infrastructure failures.

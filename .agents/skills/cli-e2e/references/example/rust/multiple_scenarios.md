@@ -30,9 +30,9 @@ Verify exact greeting bytes and successful application completion.
 ### Execution flow
 
 1. The ignored native `prints_greeting_scenario` Tokio test awaits `with_environment("example-cli:local", callback)`.
-2. Await `environment.check_command` with `Command::new(["echo", "hello from e2e"])`, no working-directory override, and no environment overrides.
-3. Compare every actual field with `CommandResult { exit_code: 0, stdout: b"hello from e2e\n".to_vec(), stderr: Vec::new() }`.
-4. Return the operation's `Result<(), Error>` from the callback and propagate `Result<(), ScopeError<Error>>` from the helper so lifecycle failures fail the native test.
+2. Await `environment.run` with `Command::new(["echo", "hello from e2e"])`, no working-directory override, and no environment overrides.
+3. Use native `assert_eq!` to compare the complete result with `CommandResult { exit_code: 0, stdout: b"hello from e2e\n".to_vec(), stderr: Vec::new() }`.
+4. Return `Ok(())` from the callback and propagate `Result<(), ScopeError<Error>>` so lifecycle failures fail the native test.
 
 ### Expected results
 
@@ -75,8 +75,8 @@ Verify that the expected nonzero application result remains available for exact 
 ### Execution flow
 
 1. The ignored native `returns_expected_failure_scenario` Tokio test awaits `with_environment("example-cli:local", callback)`.
-2. Await `environment.check_command` with `Command::new(["false"])`, using the image working directory and default environment.
-3. Compare the actual result with `CommandResult { exit_code: 1, stdout: Vec::new(), stderr: Vec::new() }`.
+2. Await `environment.run` with `Command::new(["false"])`, using the image working directory and default environment.
+3. Use native `assert_eq!` to compare the complete result with `CommandResult { exit_code: 1, stdout: Vec::new(), stderr: Vec::new() }`.
 4. Return errors rather than converting them to successful outcomes.
 
 ### Expected results

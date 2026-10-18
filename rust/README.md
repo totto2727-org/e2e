@@ -10,11 +10,7 @@ Requirements: Rust 1.88 or newer and a native C toolchain for Testcontainers' de
 No OpenSSL or pkg-config dependency is required.
 The Linux image needs `sh` when `Command.working_dir` is set.
 
-> [!IMPORTANT]
-> The crates.io setup below requires publication of a matching package.
-> Registry availability is not verified.
-
-Consumer `Cargo.toml`, after publication:
+Consumer `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
@@ -32,10 +28,12 @@ use caseyard::{with_environment, Command, CommandResult, Error, ScopeError};
 async fn greeting() -> Result<(), ScopeError<Error>> {
     with_environment("e2e-example:local", |env| async move {
         let result = env.run(Command::new(["echo", "hello"])).await?;
-        assert_eq!(result.exit_code, 0);
-        assert_eq!(result.stdout, b"hello\n");
-        assert_eq!(result.stderr, b"");
-        env.check_command(Command::new(["true"]), CommandResult::default()).await
+        assert_eq!(result, CommandResult {
+            exit_code: 0,
+            stdout: b"hello\n".to_vec(),
+            stderr: Vec::new(),
+        });
+        Ok(())
     }).await
 }
 ```
@@ -65,21 +63,23 @@ Await it directly in the native Tokio test.
 | `CommandResult`            | `exit_code: i64`, `stdout: Vec<u8>`, `stderr: Vec<u8>`                 |
 | `PartialOutput`            | `stdout: Vec<u8>`, `stderr: Vec<u8>`. No exit code.                    |
 
+Use native `assert_eq!` for command results, byte vectors, path kinds, and snapshots.
+The observation types implement `Debug` and `PartialEq`; no snapshot dependency is required.
+
 The following methods take `&self` on `Environment`.
 Except for `container_id`, all methods are async.
 
-| Method                                            | Return type                                                       |
-| ------------------------------------------------- | ----------------------------------------------------------------- |
-| `run(Command)`                                    | `Result<CommandResult, Error>`                                    |
-| `check_command(Command, CommandResult)`           | `Result<(), Error>`                                               |
-| `write_file(path: &str, bytes: &[u8])`            | `Result<(), Error>`                                               |
-| `read_file(path: &str)`                           | `Result<Vec<u8>, Error>`                                          |
-| `check_file(path: &str, expected: &[u8])`         | `Result<(), Error>`                                               |
-| `check_missing(path: &str)`                       | `Result<(), Error>`                                               |
-| `check_regular_file(path: &str)`                  | `Result<(), Error>`                                               |
-| `check_directory(path: &str)`                     | `Result<(), Error>`                                               |
-| `check_symlink(path: &str, literal_target: &str)` | `Result<(), Error>`                                               |
-| `container_id()`                                  | `&str`, immutable identity only. No mutable Docker client access. |
+| Method                                 | Return type                                                       |
+| -------------------------------------- | ----------------------------------------------------------------- |
+| `run(Command)`                         | `Result<CommandResult, Error>`                                    |
+| `write_file(path: &str, bytes: &[u8])` | `Result<(), Error>`                                               |
+| `read_file(path: &str)`                | `Result<Vec<u8>, Error>`                                          |
+| `path_kind(path: &str)`                | `Result<PathKind, Error>`                                         |
+| `read_symlink(path: &str)`             | `Result<Vec<u8>, Error>`. Literal target bytes.                   |
+| `container_id()`                       | `&str`, immutable identity only. No mutable Docker client access. |
+
+`PathKind` is `Missing`, `RegularFile`, `Directory`, `Symlink`, or `Other`.
+`path_kind` and `read_symlink` use the image's `test` and `readlink` commands, without a driver.
 
 | Language-specific behavior | Constraint                                                                                                                                                                                                      |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -89,16 +89,68 @@ Except for `container_id`, all methods are async.
 | `read_file`                | Native `ContainerAsync::copy_file_from` reads the first regular file, skips additional archive entries, and rejects directories. Symbolic-link behavior follows Docker.                                         |
 | `write_file`               | Testcontainers has no public running-container upload method. The helper uses its configured, re-exported Bollard client and a single-file tar archive with mode `0644`.                                        |
 
+### Static driver installation
+
+See [driver setup](../README.md#static-driver-for-snapshots-and-terminals) for trusted binary and image requirements.
+The existing command and file APIs do not require a driver.
+
+| API or constraint                        | Rust behavior                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------- |
+| `env.install_driver(bytes: &[u8]).await` | `Result<(), Error>`. Install once per environment before snapshots or terminals. |
+| Cloned handles                           | Share the installation. Empty bytes and a second installation are rejected.      |
+
+### Filesystem snapshots
+
+See the [shared snapshot contract](../README.md#file-state-snapshots) and [Docker scenarios](tests/e2e.md#filesystem_snapshots) ([source](tests/e2e.rs)).
+
+| API or value                | Type or behavior                                                                                   |
+| --------------------------- | -------------------------------------------------------------------------------------------------- |
+| `env.snapshot(paths).await` | `paths: impl IntoIterator<Item = impl Into<String>>`. Returns `Result<FilesystemSnapshot, Error>`. |
+| `FilesystemSnapshot`        | `entries: BTreeMap<String, PathState>`                                                             |
+| `PathState`                 | `Missing`, `RegularFile { content: Vec<u8> }`, `Directory`, or `Symlink { target: Vec<u8> }`       |
+| Unselected path             | `None`, distinct from `Some(PathState::Missing)`.                                                  |
+
+```rust,ignore
+let after = env.snapshot(baseline.entries.keys().cloned()).await?;
+assert_eq!(after, baseline);
+```
+
+### Scoped terminal sessions
+
+See the [shared terminal contract](../README.md#terminal-sessions) and [Docker scenarios](tests/e2e.md#terminal_raw_bytes_expect_resize_and_restoration) ([source](tests/e2e.rs)).
+
+| API or value                                          | Type or behavior                                                                                                                                                     |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `env.with_terminal(command, options, callback).await` | `Result<T, ScopeError<E>>`. Preserves the callback's concrete error type.                                                                                            |
+| `TerminalOptions`                                     | `rows: u16`, `columns: u16`, `input: Option<Vec<u8>>` (`None`: terminal, `Some`: pipe), `timeout: Duration`. Use `TerminalOptions::default()` for shared defaults.   |
+| `TerminalSession` methods                             | All are async and return `Result<TerminalObservation, Error>`.                                                                                                       |
+| `observe()`                                           | Read the current observation.                                                                                                                                        |
+| `expect(channel, bytes, timeout)`                     | `TerminalChannel`, `&[u8]`, `Duration` arguments.                                                                                                                    |
+| `send(bytes)`                                         | `&[u8]` input.                                                                                                                                                       |
+| `resize(rows, columns)`                               | `u16` dimensions.                                                                                                                                                    |
+| `signal(signal)`                                      | `TerminalSignal` argument.                                                                                                                                           |
+| `wait(timeout)`                                       | `Duration` argument.                                                                                                                                                 |
+| `TerminalChannel`                                     | `Stdout` or `Terminal`                                                                                                                                               |
+| `TerminalSignal`                                      | `Interrupt`, `Terminate`, `Hangup`, `Quit`, `Kill`, `User1`, or `User2`                                                                                              |
+| `TerminalObservation`                                 | `stdout, terminal, unread_input: Vec<u8>`, `status: TerminalStatus`, `termios_restored: bool`, `initial_termios, current_termios: TerminalSettings`                  |
+| `TerminalStatus`                                      | `Running`, `Exited { code: i64 }`, or `Signaled { signal: u32 }`. Application exits are observations, not helper failures.                                           |
+| `TerminalSettings`                                    | Tuple of six `u64` values (input, output, control, local flags, input speed, output speed) and control-character `Vec<u8>`.                                          |
+| Scope exit                                            | Success, callback failure, or panic closes the session. Escaped handles return cancellation errors. Cancellation stops in-flight or queued requests before close.    |
+| Terminal-close budget                                 | A fresh total 30 seconds, including session-lock acquisition and the helper request. Distinct from [container cleanup timing](#lifecycle-and-cancellation).          |
+| Scope future dropped                                  | Marks handles closed and schedules best-effort close through Tokio's blocking pool because Testcontainers exec futures are not `Send`. Keep the Tokio runtime alive. |
+| Incomplete close or lost start response               | The helper watchdog and container teardown remain the final process boundaries.                                                                                      |
+
 ### Errors
 
-| Error or condition                     | Behavior                                                                                                                                                   |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Error::Execution { failure, output }` | Retains bytes already drained by the helper. No valid exit status. Stdout is drained before stderr, so unread stderr is not guaranteed on failure.         |
-| `ExecutionFailure`                     | `Deadline`, `Cancelled`, boxed native `Testcontainers` error, `Io`, or `Protocol`.                                                                         |
-| Other infrastructure errors            | `Error::Testcontainers`, `Docker` for image inspection or upload, and `Archive` for local tar creation. Native causes remain available through `source()`. |
-| `ScopeError<E>`                        | `Infrastructure(Error)`, `Callback(E)`, or `Cleanup { prior: Option<Box<ScopeError<E>>>, errors: Vec<Error> }`.                                            |
-| Explicit cleanup failure               | Retains the prior typed callback error. Testcontainers' Drop fallback logs its own failures instead of returning them.                                     |
-| Callback panic                         | Resumes the original payload after explicit cleanup. An accompanying cleanup failure is reported to stderr.                                                |
+| Error or condition                       | Behavior                                                                                                                                                          |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Error::Execution { failure, output }`   | Retains bytes already drained by the helper. No valid exit status. Stdout is drained before stderr, so unread stderr is not guaranteed on failure.                |
+| `ExecutionFailure`                       | `Deadline`, `Cancelled`, boxed native `Testcontainers` error, `Io`, or `Protocol`.                                                                                |
+| Other infrastructure errors              | `Error::Testcontainers`, `Docker` for image inspection or upload, and `Archive` for local tar creation. Native causes remain available through `source()`.        |
+| `Error::Driver { message, observation }` | Retains helper diagnostics and an optional boxed `TerminalFailureObservation`, either complete typed observations or raw partial channels at a watchdog boundary. |
+| `ScopeError<E>`                          | `Infrastructure(Error)`, `Callback(E)`, or `Cleanup { prior: Option<Box<ScopeError<E>>>, errors: Vec<Error> }`.                                                   |
+| Explicit cleanup failure                 | Retains the prior typed callback error. Testcontainers' Drop fallback logs its own failures instead of returning them.                                            |
+| Callback panic                           | Resumes the original payload after explicit cleanup. An accompanying cleanup failure is reported to stderr.                                                       |
 
 ## Lifecycle and cancellation
 
@@ -129,7 +181,8 @@ This package does not maintain a separate endpoint resolver or API-version negot
 
 Testcontainers' default features support Unix sockets, HTTP/TCP, and HTTPS/TLS.
 Its optional properties-file configuration is not enabled by this package.
-Docker contexts, SSH endpoints, Windows containers, interactive stdin, and PTY are not part of this library's public contract.
+Docker contexts, SSH endpoints, and Windows containers are not part of this library's public contract.
+Interactive terminal stdin is available only through the optional installed-driver terminal API, not ordinary `run`.
 
 ## Development
 

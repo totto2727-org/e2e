@@ -14,10 +14,8 @@ For common image requirements and lifecycle behavior, see the [shared contract](
 Add the module to your test project:
 
 ```sh
-go get github.com/totto2727-org/e2e/go@v0.0.0-20261017065452-5b5def6e7ca1
+go get github.com/totto2727-org/e2e/go@e35bebf3c83f8a2a7df1fbc626a337543eda80d1
 ```
-
-The pseudo-version selects a source revision, not a tagged release.
 
 > [!IMPORTANT]
 > Testcontainers can pull its resource-reaper image.
@@ -37,11 +35,13 @@ import (
 func TestVersion(t *testing.T) {
 	t.Parallel()
 	environment := cli.NewEnvironment(t, "my-cli-e2e:local")
-	if err := environment.CheckCommand(
-		cli.Command{Args: []string{"my-cli", "--version"}},
-		cli.Result{ExitCode: 0, Stdout: "my-cli version 1.0.0\n", Stderr: ""},
-	); err != nil {
+	result, err := environment.Run(cli.Command{Args: []string{"my-cli", "--version"}})
+	if err != nil {
 		t.Fatal(err)
+	}
+	want := cli.Result{ExitCode: 0, Stdout: "my-cli version 1.0.0\n", Stderr: ""}
+	if result != want {
+		t.Fatalf("result=%#v want=%#v", result, want)
 	}
 }
 ```
@@ -75,13 +75,12 @@ For more cases, see the [Go example](../.agents/skills/cli-e2e/references/exampl
 | `Result.ExitCode`                | `int`      | Application exit code. Valid only when `Run` returns no error.               |
 | `Result.Stdout`, `Result.Stderr` | `string`   | Separate output streams. Strings preserve bytes without UTF-8 validation.    |
 
-| Method                                                     | Result                                                                                              |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `Run(command cli.Command) (cli.Result, error)`             | Executes the command. A nonzero application exit code is not a Go error.                            |
-| `CheckCommand(command cli.Command, want cli.Result) error` | Runs the command and compares all three fields exactly. Returns execution errors before comparison. |
+| Method                                         | Result                                                                   |
+| ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `Run(command cli.Command) (cli.Result, error)` | Executes the command. A nonzero application exit code is not a Go error. |
 
 NUL bytes in arguments, the directory, or environment entries cause an error before execution.
-An empty expected stream asserts that the command wrote no output to that stream.
+Compare complete results with `==` and report mismatches with `t.Fatalf`.
 
 ```go
 result, err := environment.Run(cli.Command{
@@ -101,18 +100,56 @@ if result.ExitCode != 0 {
 
 For required image utilities and file-transfer conditions, see [shared prerequisites](../README.md#prerequisites-and-setup).
 
-| Method                                           | Expected result                                                              |
-| ------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `WriteFile(path string, content []byte) error`   | Copies exact bytes with mode `0644`. The parent directory must exist.        |
-| `ReadFile(path string) ([]byte, error)`          | Returns exact file bytes.                                                    |
-| `CheckFile(path string, want []byte) error`      | Compares exact file bytes.                                                   |
-| `CheckMissing(path string) error`                | Requires absence, including absence of a dangling symbolic link.             |
-| `CheckRegularFile(path string) error`            | Requires a physical regular file, not a symbolic link.                       |
-| `CheckDirectory(path string) error`              | Requires a physical directory, not a symbolic link.                          |
-| `CheckSymlink(path, literalTarget string) error` | Compares the literal target without normalization. The target can be absent. |
+| Method                                         | Expected result                                                                                       |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `WriteFile(path string, content []byte) error` | Copies exact bytes with mode `0644`. The parent directory must exist.                                 |
+| `ReadFile(path string) ([]byte, error)`        | Returns exact file bytes.                                                                             |
+| `PathKind(path string) (cli.PathKind, error)`  | Returns the physical kind without following links. No driver required.                                |
+| `ReadSymlink(path string) (string, error)`     | Returns the literal link target, including trailing newlines and non-UTF-8 bytes. No driver required. |
 
-All checks return errors for mismatches or infrastructure failures.
+Use `bytes.Equal` for file bytes and `==` for path kinds and link targets.
+Path observations reject empty paths and NUL bytes before execution.
 Path-probe exit codes other than `0` and `1` are errors, not evidence of absence.
+
+## State and terminal driver setup
+
+For snapshot and terminal prerequisites, see [driver setup](../README.md#static-driver-for-snapshots-and-terminals).
+
+| Method                               | Contract                                                                                                                                                                                     |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `InstallDriver(binary []byte) error` | Installs once per environment. Rejects empty bytes and replacement after success. Failed installations can be retried. Required for snapshots and terminals, not command or file operations. |
+
+## Filesystem snapshots
+
+See the [shared snapshot contract](../README.md#file-state-snapshots), [Docker scenario source](./e2e/snapshot_test.go), and [scenario details](./e2e/snapshot_test.md).
+
+| API or value                                               | Go contract                                                                                       |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `Snapshot(paths []string) (cli.FilesystemSnapshot, error)` | Requires a nonempty list of nonempty, NUL-free paths. Rejects duplicates.                         |
+| `snapshot.Entries() []cli.SnapshotEntry`                   | Returns a fresh slice sorted by path. Use `slices.Equal` to compare captures or expected entries. |
+| `cli.SnapshotEntry`                                        | Comparable `Path`, `Kind`, `Content`, and `Target` fields. Strings preserve exact bytes.          |
+| `cli.FilesystemSnapshot`                                   | Immutable in-memory state. The zero value has no entries. No persisted snapshot storage.          |
+| `cli.PathKind`                                             | `missing`, `file`, `directory`, `symlink`, or `other`. Snapshots reject `other` kinds.            |
+
+## Terminal sessions
+
+See the [shared terminal contract](../README.md#terminal-sessions), [Docker scenario source](./e2e/terminal_test.go), and [scenario details](./e2e/terminal_test.md).
+Methods below belong to `*cli.Terminal` unless specified otherwise.
+
+| API or value                                                                                                      | Go contract                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `environment.WithTerminal(command cli.Command, options cli.TerminalOptions, use func(*cli.Terminal) error) error` | Closes the session after callback success, error, or panic.                                                                                                            |
+| `cli.TerminalOptions`                                                                                             | `Rows`, `Columns`: `int`. `Timeout`: `time.Duration`. Zero values select shared defaults. `Input []byte`: `nil` for terminal stdin, non-nil for finite pipe input.     |
+| `Observe()`                                                                                                       | Returns `(cli.TerminalObservation, error)`, as do `Expect`, `SendInput`, `Resize`, `Signal`, and `Wait`.                                                               |
+| `Expect(channel cli.TerminalChannel, data []byte, timeout time.Duration)`                                         | Channels: `cli.TerminalStdout`, `cli.TerminalOutput`.                                                                                                                  |
+| `SendInput(data []byte)`                                                                                          | Sends terminal input.                                                                                                                                                  |
+| `Resize(rows, columns int)`                                                                                       | Sets terminal geometry.                                                                                                                                                |
+| `Signal(name string)`                                                                                             | Sends a supported signal.                                                                                                                                              |
+| `Wait(timeout time.Duration)`                                                                                     | Waits for exit and drained output.                                                                                                                                     |
+| `Close() error`                                                                                                   | Public, idempotent close with a fresh 30-second cleanup budget. Other operations fail after closure.                                                                   |
+| `cli.TerminalObservation`                                                                                         | `Stdout`, `Terminal`, `UnreadInput`: `[]byte`. `Status`: `cli.TerminalStatus`. `InitialTermios`, `CurrentTermios`: `*cli.TerminalSettings`. `TermiosRestored`: `bool`. |
+| `cli.TerminalStatus`                                                                                              | `Kind`: `running`, `exited`, or `signaled`. Read `ExitCode` or `Signal` only for the corresponding kind.                                                               |
+| `*cli.TerminalError`                                                                                              | Expect failures retain captured observations in `Observation cli.TerminalObservation`.                                                                                 |
 
 ## Execution limits
 
@@ -133,4 +170,4 @@ See [Go maintenance](../AGENTS.md#go).
 
 ## License
 
-See the [repository license status](../README.md#license).
+See the [MIT license](../README.md#license).

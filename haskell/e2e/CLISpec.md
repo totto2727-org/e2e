@@ -2,6 +2,24 @@
 
 Source: [CLISpec.hs](./CLISpec.hs)
 
+## Filesystem snapshots
+
+The `filesystem snapshots` example creates a binary regular file, a physical directory, a file link, and a dangling link.
+It also selects an absent path.
+The test loads a caller-built static driver for the container architecture and installs it once per environment.
+The image needs neither Python nor Go.
+The first capture asserts every entry, exact binary bytes `[0,255,13,10]`, an empty file, and JSON at a path that contains spaces.
+A second capture remains equal after a permission change and creation of an unselected directory child.
+The application workflow then changes bytes, replaces a directory with a link, changes a literal link target without changing its resolved destination, creates the absent directory, deletes a regular file, and changes JSON whitespace without changing its meaning.
+Compare the captured maps with Hspec `shouldBe` to verify exact content, kind, target, and existence changes.
+Repeated capture must leave the application bytes unchanged.
+
+The `snapshot rejects unsupported physical kinds` example creates a FIFO with `mkfifo` and requires an infrastructure error.
+The `snapshot does not treat a non-directory parent as absence` example reads a child path below a regular file and requires an infrastructure error.
+Native transport regressions also cover permission diagnostics, malformed responses, driver read failures, invalid paths, unchanged snapshots, and selected versus unselected missing paths.
+
+All snapshot cases use the same owned-container and caller-image audits as the other examples.
+
 Each scenario is registered as an ordinary Hspec `it` and invokes `withEnvironment` through the per-example `auditedEnvironment` helper.
 No scenario runs before Hspec selects and executes its example.
 Hspec `--match` selects actual execution, and `--dry-run` lists examples without contacting Docker.
@@ -9,6 +27,45 @@ Each invocation inspects the caller-built image, holds a private stopped lease o
 The private test-only Engine audit snapshots the caller image ID and all `org.e2e.haskell.owner` container IDs before each invocation, requires the running container ID to be absent from the prior snapshot, and checks equal snapshots and image IDs after cleanup.
 These audits assume sequential examples and no other Haskell Docker invocation during their snapshot windows.
 The library itself has no concurrency gate. Consumers without snapshot audits can use Hspec `parallel` and `--jobs N`.
+
+## Scoped terminals
+
+These examples use the installed static driver through the public `withTerminal` callback.
+Each example loads the amd64 or arm64 binary selected by the container's `uname -m` response.
+The driver binaries and the root and nonroot fixture images must be built before these examples run.
+The root `pree2e` task supplies these prerequisites.
+
+| Example                                                                     | Commands and fixtures                                                                                                                                                                               | Required observations                                                                                                                                                                                                                                                  |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `terminal raw bytes and restoration`                                        | `sh`, `stty`, and `dd` save terminal settings, enter raw mode, write ANSI prompt bytes to stderr, and read Up/Down/Right/Left, Space, Enter, Esc, Ctrl-D, and Ctrl-C bytes into `/workspace/input`. | Every input byte is unchanged. Readiness precedes exit. Raw-mode termios differ, ANSI output remains exact, stdout includes separate NUL and byte 255, exit is zero, and original termios are restored.                                                                |
+| `terminal preserves argv cwd HOME and TERM=...`                             | `sh` prints an argument with spaces, an empty argument, its directory, HOME, and TERM. Parameters use `xterm-256color` and `caseyard-unsupported`.                                                  | Exact argument boundaries, working directory, HOME, and both TERM values reach the application. Unsupported-TERM policy belongs to the application.                                                                                                                    |
+| `terminal external SIGINT reaches the foreground process group`             | `sh` saves termios, disables echo, hides the cursor, and installs an INT handler that restores termios and prints cursor-show bytes.                                                                | External `Interrupt` reaches the handler, exit 7 remains an application result, ANSI bytes are exact, and original termios are restored after exit.                                                                                                                    |
+| `terminal prompt matching spans observations and consumes repeated matches` | `sh` emits `pro`, waits for input, then emits `mpt> tail`. A later input produces the complete prompt again.                                                                                        | An incomplete prompt yields a bounded error without consuming its prefix. A complete match spans observed fragments, trailing bytes remain available, consumed prompts cannot replay, failure retains channel/output/running state, and the next prompt still matches. |
+| `terminal tiny geometry recovers before draining long output`               | A 1-row, 8-column `sh` fixture waits for input. After resize it prints its geometry, waits again, then emits 128 KiB plus an end marker on stdout.                                                  | Mid-run state remains running with empty stdout and an unchanged file snapshot. Resize reaches 24 by 80. Complete long output is retained, termios are restored, and the final snapshot remains unchanged.                                                             |
+| `terminal callback cancellation preserves filesystem snapshot`              | A waiting process records its PID. The callback throws `ThreadKilled` after byte readiness.                                                                                                         | The original asynchronous exception survives cleanup, its process group is gone, and the subsequent snapshot equals its baseline.                                                                                                                                      |
+| `terminal pipe input remains unread on no-op failure`                       | `sh` writes `ready` to stderr and exits 7 without reading pipe input `[0,255,10]`.                                                                                                                  | Exact terminal bytes, empty stdout, exit 7, all input unread, restored termios, and rejection of terminal sends in pipe mode.                                                                                                                                          |
+| `terminal pipe input delivers exact bytes and EOF`                          | `cat` reads pipe input `[0,255,13,10]` until EOF.                                                                                                                                                   | Exact separate stdout, empty terminal output, no unread input, and exit zero.                                                                                                                                                                                          |
+| `terminal resize and signal`                                                | `sh` installs a WINCH handler that runs `stty size`, prints readiness, and waits.                                                                                                                   | Resize produces `12 34` through the terminal. `Terminate` produces signal 15 without stdout.                                                                                                                                                                           |
+| `terminal scope closes a surviving process group`                           | `sh` records its PID, prints readiness, and waits in `sleep infinity`.                                                                                                                              | Returning from the callback kills the surviving process group before a normal environment command checks its PID.                                                                                                                                                      |
+
+Expectations use byte readiness, not sleeps.
+The examples keep environment checks inside the terminal callback where the process must still be running.
+The native suite separately checks scoped cleanup on caller failure and asynchronous exceptions, closed handles, malformed byte arrays, and error observations.
+These generic fixtures verify SDK transport and lifecycle boundaries, not selection, list scrolling, or application rendering policy.
+Actual long-list navigation and rendering belong to the consumer application's interactive scenarios.
+ANSI screen and cursor restoration in these fixtures are application-owned output assertions, not restoration performed by the helper.
+Literal Ctrl-C and Ctrl-D transport in raw mode is distinct from external signals and from canonical EOF behavior.
+
+## Nonroot driver and permission scenarios
+
+The `nonroot image installs one driver for snapshots and terminals` example uses `e2e-example-nonroot:local`.
+It writes `/tmp/state` as the image user, captures its exact bytes plus a missing path, and runs a terminal command with separate `success` and `ready` output.
+The same installed driver must support both operations without root privileges or a post-transfer `chmod`.
+
+The `nonroot snapshot inspection permission failure is not absence` example creates a directory with mode `000` and selects a child beneath it.
+The `nonroot snapshot file read permission failure is not absence` example selects a regular file with mode `000`.
+Both operations must fail instead of recording `Missing`.
+All nonroot examples use the same owned-container and caller-image preservation audits as the root examples.
 
 ## `greeting`
 
@@ -81,7 +138,7 @@ One `withEnvironment` invocation owns all commands and file operations for this 
 1. Execute `["sh", "-c", "echo first > /workspace/result.txt"]`, expecting `Result 0 "" ""`.
 2. Execute `["sh", "-c", "echo second >> /workspace/result.txt"]`, expecting `Result 0 "" ""`.
 3. Execute `["cat", "/workspace/result.txt"]`, expecting `Result 0 "first\nsecond\n" ""`.
-4. Compare the file bytes with `first\nsecond\n` using `checkFile`.
+4. Compare the file bytes with `first\nsecond\n` using `readFile` and Hspec `shouldReturn`.
 5. Write bytes `00 ff 0a` to `/workspace/bytes` through the archive API, then read and compare the exact bytes.
 6. Execute `["stat", "-c", "%a", "/workspace/bytes"]`, expecting `Result 0 "644\n" ""`, then clean up and audit.
 
@@ -140,7 +197,7 @@ The result requires exec inspection, rather than the status of a host Docker pro
 
 ### Scope
 
-Verify working-directory and environment overrides, separate streams, and consistent execution/assertion APIs in Hspec example `separate streams`.
+Verify working-directory and environment overrides and separate streams in Hspec example `separate streams`.
 
 ### Commands under test
 
@@ -165,9 +222,8 @@ A fresh environment is created inside Hspec execution.
 ### Execution flow
 
 1. Set `Command` argv to `["sh", "-c", script]` using the literal script above, working directory `/workspace`, and the single environment entry above.
-2. Call `checkCommand`, comparing `Result 7 "/workspace/synthetic-home:/workspace\n" "diagnostic\n"`.
-3. Execute the same command again with `run` and compare the same complete result using Hspec `shouldReturn`.
-4. Clean up and audit the invocation.
+2. Call `run` and use Hspec `shouldReturn` to compare `Result 7 "/workspace/synthetic-home:/workspace\n" "diagnostic\n"`.
+3. Clean up and audit the invocation.
 
 ### Expected results
 
@@ -187,12 +243,12 @@ Verify physical path types, literal link targets, and rejection of misleading li
 
 ### Commands under test
 
-| Command path | Purpose                                                                    |
-| ------------ | -------------------------------------------------------------------------- |
-| `mkdir`      | Create a physical directory.                                               |
-| `ln`         | Create file, dangling, and directory links.                                |
-| `test`       | Probe existence, link status, and physical types inside assertion helpers. |
-| `readlink`   | Compare unchanged link targets inside `checkSymlink`.                      |
+| Command path | Purpose                                                                |
+| ------------ | ---------------------------------------------------------------------- |
+| `mkdir`      | Create a physical directory.                                           |
+| `ln`         | Create file, dangling, and directory links.                            |
+| `test`       | Observe existence, link status, and physical types through `pathKind`. |
+| `readlink`   | Read unchanged literal link targets through `readSymlink`.             |
 
 ### Arguments and options
 
@@ -214,19 +270,19 @@ Write `/workspace/result.txt` with exact bytes `fixture\n` before creating links
 2. Execute `["ln", "-s", "result.txt", "/workspace/link"]`.
 3. Execute `["ln", "-s", "missing.txt", "/workspace/dangling"]`.
 4. Execute `["ln", "-s", "directory", "/workspace/dirlink"]`. Every setup command must return `Result 0 "" ""`.
-5. Assert a physical regular file and directory and missing `/workspace/missing.txt`.
-6. Assert literal targets `result.txt` and `missing.txt` for the file and dangling links.
-7. Require assertion failures for treating the dangling link as missing, the file link as a regular file, and the directory link as a directory.
-8. Require an assertion failure when comparing `/workspace/link` with the resolved target `/workspace/result.txt`, then clean up and audit.
+5. Compare `pathKind` results with `PathRegularFile`, `PathDirectory`, and `PathMissing` through Hspec `shouldReturn`.
+6. Require `PathSymlink` for the file, dangling, and directory links.
+7. Compare `readSymlink` results with the literal targets `result.txt`, `missing.txt`, and `directory`, then clean up and audit.
 
 ### Expected results
 
-Physical file and directory probes succeed, missing paths are accepted, and relative or dangling link targets remain unchanged.
-The four deliberately incorrect path assertions throw `AssertionFailed`.
+Physical regular files, directories, missing paths, and symbolic links have distinct observed kinds.
+Relative and dangling link targets remain unchanged.
 
 ### Notes
 
-The fixture text bytes are written but not independently read back in this scenario.
+The literal link targets are compared exactly.
+The basic path observations do not require a driver.
 All fixture filesystem state disappears with the case container. No host mounts are used.
 
 ## `deadline`

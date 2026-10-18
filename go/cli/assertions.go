@@ -1,84 +1,60 @@
 package cli
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
-// CheckCommand compares the exit code and both output streams exactly.
-func (e *Environment) CheckCommand(command Command, want Result) error {
-	result, err := e.Run(command)
-	if err != nil {
-		return err
+// PathKind reports a physical path kind without following symbolic links.
+// It does not require an installed driver.
+func (e *Environment) PathKind(path string) (PathKind, error) {
+	if err := validatePath(path); err != nil {
+		return "", err
 	}
-	if result != want {
-		return fmt.Errorf("command %q: result=%#v want=%#v", command.Args, result, want)
+	for _, probe := range []struct {
+		flag string
+		kind PathKind
+	}{{"-L", PathSymlink}, {"-f", PathFile}, {"-d", PathDirectory}} {
+		matches, err := e.probePath(probe.flag, path)
+		if err != nil {
+			return "", err
+		}
+		if matches {
+			return probe.kind, nil
+		}
 	}
-	return nil
-}
-
-// CheckMissing rejects existing paths, including dangling symbolic links.
-func (e *Environment) CheckMissing(path string) error {
 	exists, err := e.probePath("-e", path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if exists {
-		return fmt.Errorf("path %q: expected missing path", path)
+		return PathOther, nil
 	}
-	linked, err := e.probePath("-L", path)
-	if err != nil {
-		return err
-	}
-	if linked {
-		return fmt.Errorf("path %q: expected missing path, found symbolic link", path)
-	}
-	return nil
+	return PathMissing, nil
 }
 
-// CheckRegularFile requires a regular file, not a symbolic link to one.
-func (e *Environment) CheckRegularFile(path string) error {
-	return e.checkPhysicalType("-f", "regular file", path)
-}
-
-// CheckDirectory requires a directory, not a symbolic link to one.
-func (e *Environment) CheckDirectory(path string) error {
-	return e.checkPhysicalType("-d", "directory", path)
-}
-
-// CheckSymlink compares the literal link target without resolving it.
-func (e *Environment) CheckSymlink(path, literalTarget string) error {
-	linked, err := e.probePath("-L", path)
-	if err != nil {
-		return err
-	}
-	if !linked {
-		return fmt.Errorf("path %q: expected symbolic link", path)
+// ReadSymlink returns a literal target without resolving it.
+// Strings preserve exact target bytes, including trailing newlines.
+func (e *Environment) ReadSymlink(path string) (string, error) {
+	if err := validatePath(path); err != nil {
+		return "", err
 	}
 	result, err := e.Run(Command{Args: []string{"readlink", "--", path}})
 	if err != nil {
-		return err
+		return "", err
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("readlink %q: exit_code=%d stderr=%q", path, result.ExitCode, result.Stderr)
+		return "", fmt.Errorf("readlink %q: exit_code=%d stderr=%q", path, result.ExitCode, result.Stderr)
 	}
-	if result.Stdout != literalTarget+"\n" {
-		return fmt.Errorf("symlink %q: target_output=%q want=%q", path, result.Stdout, literalTarget+"\n")
+	if !strings.HasSuffix(result.Stdout, "\n") {
+		return "", fmt.Errorf("readlink %q: missing output terminator", path)
 	}
-	return nil
+	return strings.TrimSuffix(result.Stdout, "\n"), nil
 }
 
-func (e *Environment) checkPhysicalType(flag, description, path string) error {
-	matches, err := e.probePath(flag, path)
-	if err != nil {
-		return err
-	}
-	if !matches {
-		return fmt.Errorf("path %q: expected %s", path, description)
-	}
-	linked, err := e.probePath("-L", path)
-	if err != nil {
-		return err
-	}
-	if linked {
-		return fmt.Errorf("path %q: expected physical %s, found symbolic link", path, description)
+func validatePath(path string) error {
+	if path == "" || strings.ContainsRune(path, '\x00') {
+		return fmt.Errorf("path %q: must be nonempty and contain no NUL", path)
 	}
 	return nil
 }

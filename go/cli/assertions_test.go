@@ -7,41 +7,26 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
-	"strings"
 	"testing"
 )
 
-func TestEnvironmentCheckCommand_compares_all_fields_and_applies_options(t *testing.T) {
-	container := &fakeContainer{result: Result{ExitCode: 7, Stdout: "out\n", Stderr: "err\n"}}
-	environment := &Environment{ctx: t.Context(), container: container}
-	command := Command{Args: []string{"example"}, WorkingDir: "/work", Env: []string{"KEY=value"}}
-	want := container.result
-	if err := environment.CheckCommand(command, want); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(container.command, command) {
-		t.Fatalf("command=%+v want=%+v", container.command, command)
-	}
-	for _, field := range []string{"exit code", "stdout", "stderr"} {
-		t.Run(field, func(t *testing.T) {
-			mismatch := want
-			switch field {
-			case "exit code":
-				mismatch.ExitCode = 0
-			case "stdout":
-				mismatch.Stdout = "wrong"
-			case "stderr":
-				mismatch.Stderr = "wrong"
-			}
-			if err := environment.CheckCommand(command, mismatch); err == nil {
-				t.Fatal("expected mismatch")
-			}
-		})
+func TestEnvironmentPathObservations_reject_invalid_paths_before_execution(t *testing.T) {
+	for _, path := range []string{"", "bad\x00path"} {
+		container := &fakeContainer{}
+		environment := &Environment{ctx: t.Context(), container: container}
+		if _, err := environment.PathKind(path); err == nil {
+			t.Fatalf("PathKind accepted %q", path)
+		}
+		if _, err := environment.ReadSymlink(path); err == nil {
+			t.Fatalf("ReadSymlink accepted %q", path)
+		}
+		if container.runCalls != 0 {
+			t.Fatalf("invalid path executed %d commands", container.runCalls)
+		}
 	}
 }
 
-func TestEnvironmentPathAssertions_physical_types_and_literal_targets(t *testing.T) {
+func TestEnvironmentPathKind_physical_types_and_literal_targets(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "file ; $(not-a-command)")
 	if err := os.WriteFile(file, []byte("content"), 0o600); err != nil {
@@ -51,88 +36,61 @@ func TestEnvironmentPathAssertions_physical_types_and_literal_targets(t *testing
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	fileLink := filepath.Join(root, "file link")
-	if err := os.Symlink(filepath.Base(file), fileLink); err != nil {
-		t.Fatal(err)
-	}
-	directoryLink := filepath.Join(root, "directory link")
-	if err := os.Symlink("directory", directoryLink); err != nil {
-		t.Fatal(err)
-	}
-	dangling := filepath.Join(root, "dangling")
-	literal := "../absent target\n"
-	if err := os.Symlink(literal, dangling); err != nil {
-		t.Fatal(err)
+	links := map[string]string{"file link": filepath.Base(file), "directory link": "directory", "dangling": "../absent target\n\xff"}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	environment := &Environment{ctx: t.Context(), container: &localCommandContainer{}}
 	for _, test := range []struct {
-		name      string
-		check     func() error
-		wantError bool
+		path string
+		want PathKind
 	}{
-		{name: "missing", check: func() error { return environment.CheckMissing(filepath.Join(root, "absent")) }},
-		{name: "existing", check: func() error { return environment.CheckMissing(file) }, wantError: true},
-		{name: "dangling is not missing", check: func() error { return environment.CheckMissing(dangling) }, wantError: true},
-		{name: "regular file", check: func() error { return environment.CheckRegularFile(file) }},
-		{name: "directory is not file", check: func() error { return environment.CheckRegularFile(directory) }, wantError: true},
-		{name: "file link is not physical file", check: func() error { return environment.CheckRegularFile(fileLink) }, wantError: true},
-		{name: "directory", check: func() error { return environment.CheckDirectory(directory) }},
-		{name: "file is not directory", check: func() error { return environment.CheckDirectory(file) }, wantError: true},
-		{name: "directory link is not physical directory", check: func() error { return environment.CheckDirectory(directoryLink) }, wantError: true},
-		{name: "literal relative target", check: func() error { return environment.CheckSymlink(fileLink, filepath.Base(file)) }},
-		{name: "literal dangling newline target", check: func() error { return environment.CheckSymlink(dangling, literal) }},
-		{name: "resolved target rejected", check: func() error { return environment.CheckSymlink(fileLink, file) }, wantError: true},
-		{name: "file is not symlink", check: func() error { return environment.CheckSymlink(file, "anything") }, wantError: true},
+		{file, PathFile}, {directory, PathDirectory}, {filepath.Join(root, "absent"), PathMissing},
+		{filepath.Join(root, "file link"), PathSymlink}, {filepath.Join(root, "directory link"), PathSymlink}, {filepath.Join(root, "dangling"), PathSymlink},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			if err := test.check(); (err != nil) != test.wantError {
-				t.Fatalf("err=%v wantError=%t", err, test.wantError)
+		t.Run(filepath.Base(test.path), func(t *testing.T) {
+			got, err := environment.PathKind(test.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("kind=%q want=%q", got, test.want)
 			}
 		})
 	}
+	for name, want := range links {
+		t.Run(name+" target", func(t *testing.T) {
+			got, err := environment.ReadSymlink(filepath.Join(root, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Fatalf("target=%q want=%q", got, want)
+			}
+		})
+	}
+	if _, err := environment.ReadSymlink(file); err == nil {
+		t.Fatal("regular file accepted as symlink")
+	}
 }
 
-func TestEnvironmentAssertions_reject_infrastructure_failures(t *testing.T) {
+func TestEnvironmentPathKind_rejects_infrastructure_failures(t *testing.T) {
 	failure := errors.New("daemon unavailable")
 	for _, test := range []struct {
 		name      string
 		container runtimeContainer
 		wantCause error
 	}{
-		{name: "transport", container: &fakeContainer{runErr: failure}, wantCause: failure},
-		{name: "invalid test exit", container: &fakeContainer{result: Result{ExitCode: 2}}},
-		{name: "missing test utility", container: &fakeContainer{result: Result{ExitCode: 127}}},
+		{"transport", &fakeContainer{runErr: failure}, failure},
+		{"invalid test exit", &fakeContainer{result: Result{ExitCode: 2}}, nil},
+		{"missing test utility", &fakeContainer{result: Result{ExitCode: 127}}, nil},
+		{"later probe", &pathProbeContainer{failFlag: "-d"}, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			environment := &Environment{ctx: t.Context(), container: test.container}
-			for _, check := range []func() error{
-				func() error { return environment.CheckMissing("path") },
-				func() error { return environment.CheckRegularFile("path") },
-				func() error { return environment.CheckDirectory("path") },
-				func() error { return environment.CheckSymlink("path", "target") },
-			} {
-				err := check()
-				if err == nil || (test.wantCause != nil && !errors.Is(err, test.wantCause)) {
-					t.Fatalf("err=%v wantCause=%v", err, test.wantCause)
-				}
-			}
-		})
-	}
-}
-
-func TestEnvironmentCheckSymlink_reports_readlink_failure(t *testing.T) {
-	failure := errors.New("readlink transport")
-	for _, test := range []struct {
-		name      string
-		container *readlinkFailureContainer
-		wantCause error
-	}{
-		{name: "exit", container: &readlinkFailureContainer{exitCode: 1}},
-		{name: "transport", container: &readlinkFailureContainer{err: failure}, wantCause: failure},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			environment := &Environment{ctx: t.Context(), container: test.container}
-			err := environment.CheckSymlink("path", "target")
+			_, err := environment.PathKind("path")
 			if err == nil || (test.wantCause != nil && !errors.Is(err, test.wantCause)) {
 				t.Fatalf("err=%v wantCause=%v", err, test.wantCause)
 			}
@@ -140,38 +98,51 @@ func TestEnvironmentCheckSymlink_reports_readlink_failure(t *testing.T) {
 	}
 }
 
-func TestEnvironmentAssertions_reject_second_probe_failure(t *testing.T) {
-	environment := &Environment{ctx: t.Context(), container: &secondProbeFailureContainer{}}
-	for _, check := range []func() error{
-		func() error { return environment.CheckMissing("path") },
-		func() error { return environment.CheckRegularFile("path") },
-		func() error { return environment.CheckDirectory("path") },
+func TestEnvironmentPathKind_other(t *testing.T) {
+	environment := &Environment{ctx: t.Context(), container: &pathProbeContainer{}}
+	got, err := environment.PathKind("path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != PathOther {
+		t.Fatalf("kind=%q want=%q", got, PathOther)
+	}
+}
+
+func TestEnvironmentReadSymlink_reports_failures(t *testing.T) {
+	failure := errors.New("readlink transport")
+	for _, test := range []struct {
+		name      string
+		container *fakeContainer
+		wantCause error
+	}{
+		{"exit", &fakeContainer{result: Result{ExitCode: 1}}, nil},
+		{"transport", &fakeContainer{runErr: failure}, failure},
+		{"malformed output", &fakeContainer{result: Result{Stdout: "unterminated"}}, nil},
 	} {
-		if err := check(); err == nil || !strings.Contains(err.Error(), "unexpected exit_code=127") {
-			t.Fatalf("err=%v want unexpected exit code", err)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			environment := &Environment{ctx: t.Context(), container: test.container}
+			_, err := environment.ReadSymlink("path")
+			if err == nil || (test.wantCause != nil && !errors.Is(err, test.wantCause)) {
+				t.Fatalf("err=%v wantCause=%v", err, test.wantCause)
+			}
+		})
 	}
 }
 
-func TestEnvironmentCheckCommand_preserves_infrastructure_error(t *testing.T) {
-	failure := errors.New("exec failed")
-	environment := &Environment{ctx: t.Context(), container: &fakeContainer{runErr: failure}}
-	if err := environment.CheckCommand(Command{Args: []string{"example"}}, Result{}); !errors.Is(err, failure) {
-		t.Fatalf("err=%v want wrapped failure", err)
-	}
+type pathProbeContainer struct {
+	fakeContainer
+	failFlag string
 }
 
-type secondProbeFailureContainer struct{ fakeContainer }
-
-func (f *secondProbeFailureContainer) Run(_ context.Context, command Command) (Result, error) {
-	exitCode := 0
-	switch command.Args[1] {
-	case "-e":
-		exitCode = 1
-	case "-L":
-		exitCode = 127
+func (f *pathProbeContainer) Run(_ context.Context, command Command) (Result, error) {
+	if command.Args[1] == f.failFlag {
+		return Result{ExitCode: 127}, nil
 	}
-	return Result{ExitCode: exitCode}, nil
+	if command.Args[1] == "-e" {
+		return Result{}, nil
+	}
+	return Result{ExitCode: 1}, nil
 }
 
 type localCommandContainer struct{ fakeContainer }
@@ -193,17 +164,4 @@ func (f *localCommandContainer) Run(ctx context.Context, request Command) (Resul
 	}
 	result.ExitCode = command.ProcessState.ExitCode()
 	return result, nil
-}
-
-type readlinkFailureContainer struct {
-	fakeContainer
-	exitCode int
-	err      error
-}
-
-func (f *readlinkFailureContainer) Run(_ context.Context, command Command) (Result, error) {
-	if command.Args[0] == "test" {
-		return Result{}, nil
-	}
-	return Result{ExitCode: f.exitCode}, f.err
 }

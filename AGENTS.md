@@ -5,21 +5,23 @@ For installation, public API behavior, and consumer requirements, use the [root 
 
 ## Repository structure
 
-| Path                                            | Maintained content                                                   |
-| ----------------------------------------------- | -------------------------------------------------------------------- |
-| `go/cli/`                                       | Go library and native tests.                                         |
-| `go/e2e/`                                       | Go Docker tests, selected with the `e2e` build tag.                  |
-| `haskell/src/`, `haskell/test/`, `haskell/e2e/` | Haskell library, native Hspec specs, and Docker Hspec specs.         |
-| `typescript/src/`, `typescript/test/`           | TypeScript library and native, package, and Docker Vitest projects.  |
-| `rust/src/`, `rust/tests/`                      | Rust library and native or ignored Docker tests.                     |
-| `fixtures/cli/Dockerfile`                       | Shared Linux application image for acceptance tests.                 |
-| `.agents/skills/cli-e2e/references/example/`    | Equivalent public-API consumer examples and their sibling documents. |
+| Path                                             | Maintained content                                                   |
+| ------------------------------------------------ | -------------------------------------------------------------------- |
+| `go/cli/`                                        | Go library and native tests.                                         |
+| `go/cmd/caseyard-driver/`, `go/internal/driver/` | Static Linux helper executable, private transport, and native tests. |
+| `go/e2e/`                                        | Go Docker tests, selected with the `e2e` build tag.                  |
+| `haskell/src/`, `haskell/test/`, `haskell/e2e/`  | Haskell library, native Hspec specs, and Docker Hspec specs.         |
+| `typescript/src/`, `typescript/test/`            | TypeScript library and native, package, and Docker Vitest projects.  |
+| `rust/src/`, `rust/tests/`                       | Rust library and native or ignored Docker tests.                     |
+| `fixtures/cli/Dockerfile`                        | Shared Linux application image for acceptance tests.                 |
+| `.agents/skills/cli-e2e/references/example/`     | Equivalent public-API consumer examples and their sibling documents. |
 
 ## Documentation ownership
 
 | Document                                     | Canonical content                                                                                         |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| [Root README](./README.md)                   | Purpose, language-independent public contract, implementation status, and links to language guides.       |
+| [Root README](./README.md)                   | Purpose, language-independent public contract, and links to language guides.                              |
+| [Driver setup](./docs/driver.md)             | Optional snapshot/terminal prerequisites, trusted cross-build procedure, and installation routes.         |
 | Language READMEs                             | Consumer installation, language-specific public APIs, limitations, and links to relevant examples.        |
 | Example sources and sibling Markdown         | Concrete usage and the behavior each example actually verifies.                                           |
 | [cli-e2e](./.agents/skills/cli-e2e/SKILL.md) | Language-independent scenario design, implementation, and documentation guidance, with links to examples. |
@@ -51,7 +53,6 @@ Keep documentation examples limited to test source files and their sibling scena
 Do not add package manifests, lockfiles, runner entrypoints, standalone tool configuration, or root task dependencies for them.
 Show normal published-package setup in the language READMEs, not checkout-relative dependency overrides.
 When manual execution is useful, integrate the source into an existing consumer test project.
-Registry consumption remains unverified until the required packages are published.
 Keep `minimumReleaseAge: 1440` and `minimumReleaseAgeStrict: true` without bypasses.
 Keep the Vite+ catalog, Vite alias, and bundled Vitest override aligned with the template.
 Do not deny Vite+ lifecycle scripts through a package-specific override without evidence.
@@ -107,7 +108,12 @@ vp run e2e
 
 `vp run -r ci` checks and builds all implementations and runs native tests.
 It does not execute Docker tests or build documentation examples.
-`e2e` builds `fixtures/cli` with the `e2e-example:local` tag, then runs the four language suites sequentially.
+`e2e` builds the static Linux amd64 and arm64 drivers, builds `fixtures/cli` with the `e2e-example:local` tag and its `nonroot` stage with `e2e-example-nonroot:local`, then runs the four language suites sequentially.
+Use `vp run @totto2727/caseyard-go#build:driver` to build only the drivers.
+Their ignored outputs are `go/target/driver-linux-amd64` and `go/target/driver-linux-arm64`.
+Standalone Docker suites require these outputs as well as the fixture image.
+Select the binary for the container architecture rather than the test host architecture.
+Keep the shared image free of Python and Go so acceptance verifies post-start executable transfer.
 Use `vp run @totto2727/caseyard-go#ci` or the corresponding Haskell, TypeScript, or Rust package name to select one graph.
 Standalone language Docker commands require the prebuilt fixture image.
 
@@ -132,9 +138,13 @@ Each language must verify these public behaviors against the shared image:
 | Separate streams | Working directory and environment reach the process; stdout and stderr remain separate on failure.        |
 | Physical paths   | Regular files, directories, missing paths, literal links, and dangling links follow the public contracts. |
 | Deadline         | An indefinite command returns a deadline error and its container is removed.                              |
+| Snapshots        | Explicit path kinds, exact bytes, literal links, deterministic differences, and read failures.            |
+| Terminal session | Output-driven input, separate stdout, pipe input, resize, signals, raw output, and scope cleanup.         |
 
 Also verify isolation between scopes, owned-container cleanup, and preservation of the caller's image.
-Keep assertions inside standard test bodies; extract only shared lifecycle, fixtures, or assertions.
+Keep assertions inside standard test bodies and use the framework's equality, diff, and snapshot facilities.
+Caseyard returns command, path, file, and snapshot observations instead of implementing verdicts or snapshot persistence.
+Extract only shared lifecycle and fixtures.
 Use controlled native tests for invalid inputs, transport failures, partial output, comparison failures, cleanup failures, and cancellation.
 
 ## Implementation constraints
@@ -148,6 +158,18 @@ Each resource's cleanup has a fresh thirty-second total budget, including retrie
 Own attached stream connections and close them on cancellation.
 Do not infer application exit status from the host `docker exec` status or mix infrastructure diagnostics into command stderr.
 Keep transport support and cancellation limits explicit; do not infer parity from another backend.
+
+### Static driver
+
+When changing terminal or snapshot transport, read [the private wire contract](./fixtures/pty/protocol.md).
+Keep the helper a static Linux executable built with `CGO_ENABLED=0` for amd64 and arm64.
+The caller supplies trusted matching binary bytes through each language's public install operation.
+Do not embed binaries, run an implicit download, or require an interpreter in the target image.
+Keep generated executables in ignored build output directories and out of commits and library archives.
+Register session ownership before returning its start response, bound all waits, preserve raw streams, and complete close cleanup before acknowledging it.
+Native driver tests verify controlled errors and transport behavior.
+Each language's real Docker tests verify its public adapter against the shared helper.
+Do not infer full PTY coverage or consumer-migration success from compilation alone.
 
 ## Language-specific maintenance
 

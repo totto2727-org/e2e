@@ -6,6 +6,17 @@ use std::{
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+pub(super) fn disconnected_environment() -> Result<Environment, Error> {
+    Ok(Environment {
+        container: Weak::new(),
+        docker: bollard::Docker::connect_with_local_defaults()?,
+        id: "native-no-container".into(),
+        deadline: Instant::now() + CASE_BUDGET,
+        cancel: CancellationToken::new(),
+        driver: Arc::new(tokio::sync::Mutex::new(None)),
+    })
+}
+
 #[test]
 fn argv_boundaries_and_empty_values_are_preserved() -> TestResult {
     let command = Command::new(["printf", "%s", "", "two words", "'literal'"]);
@@ -67,14 +78,29 @@ fn invalid_paths_are_rejected() {
         assert!(matches!(path_valid(path), Err(Error::InvalidInput(_))));
     }
 }
+#[tokio::test]
+async fn invalid_path_observations_fail_before_execution() -> TestResult {
+    let env = disconnected_environment()?;
+    for path in ["", "invalid\0path"] {
+        assert!(matches!(
+            env.path_kind(path).await,
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            env.read_symlink(path).await,
+            Err(Error::InvalidInput(_))
+        ));
+    }
+    Ok(())
+}
 #[test]
-fn every_command_field_is_compared_exactly() -> TestResult {
+fn every_command_field_participates_in_native_equality() {
     let expected = CommandResult {
         exit_code: 7,
         stdout: vec![0, 255],
         stderr: vec![],
     };
-    compare_command(&expected, &expected)?;
+    assert_eq!(expected, expected.clone());
     for actual in [
         CommandResult {
             exit_code: 0,
@@ -89,17 +115,13 @@ fn every_command_field_is_compared_exactly() -> TestResult {
             ..expected.clone()
         },
     ] {
-        assert!(matches!(
-            compare_command(&actual, &expected),
-            Err(Error::Assertion(_))
-        ));
+        assert_ne!(actual, expected);
     }
-    Ok(())
 }
 #[test]
 fn upload_archive_preserves_exact_bytes_and_mode() -> TestResult {
     let payload = [0, 1, 255, b'\n'];
-    let bytes = file_archive(std::ffi::OsStr::new("fixture"), &payload)?;
+    let bytes = file_archive(std::ffi::OsStr::new("fixture"), &payload, 0o644)?;
     let mut archive = tar::Archive::new(bytes.as_slice());
     let mut entries = archive.entries()?;
     let mut entry = entries.next().ok_or("expected archive entry")??;

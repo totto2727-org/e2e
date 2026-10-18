@@ -29,14 +29,14 @@ library
   import: settings
   hs-source-dirs: src
   exposed-modules: Test.CLI.E2E
-  other-modules: Test.CLI.E2E.Internal
+  other-modules: Test.CLI.E2E.Internal, Test.CLI.E2E.Terminal
 
 test-suite native
   import: settings
   type: exitcode-stdio-1.0
   hs-source-dirs: test, src
   main-is: Spec.hs
-  other-modules: NativeSpec, Fixture, Test.CLI.E2E, Test.CLI.E2E.Internal
+  other-modules: NativeSpec, Fixture, Test.CLI.E2E, Test.CLI.E2E.Internal, Test.CLI.E2E.Terminal
   build-tool-depends: hspec-discover:hspec-discover >=2.10 && <2.12
   build-depends: hspec >=2.10 && <2.12
   ghc-options: -threaded
@@ -46,7 +46,7 @@ test-suite docker-e2e
   type: exitcode-stdio-1.0
   hs-source-dirs: e2e, src
   main-is: Spec.hs
-  other-modules: CLISpec, Test.CLI.E2E, Test.CLI.E2E.Internal
+  other-modules: CLISpec, Test.CLI.E2E, Test.CLI.E2E.Internal, Test.CLI.E2E.Terminal
   build-tool-depends: hspec-discover:hspec-discover >=2.10 && <2.12
   build-depends: hspec >=2.10 && <2.12
   ghc-options: -threaded

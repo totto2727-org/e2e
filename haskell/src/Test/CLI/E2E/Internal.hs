@@ -6,7 +6,7 @@
 module Test.CLI.E2E.Internal where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception hiding (AssertionFailed)
+import Control.Exception
 import Control.Monad (unless, when)
 import Data.Aeson hiding (Result)
 import Data.Aeson.Types (Parser, parseEither)
@@ -35,7 +35,6 @@ data E2EError
   | Infrastructure String
   | DeadlineExceeded Output
   | ExecutionFailed SomeException Output
-  | AssertionFailed String
   | CleanupFailed SomeException (Maybe SomeException)
   deriving (Show, Typeable)
 instance Exception E2EError
@@ -47,7 +46,9 @@ data Result = Result { exitCode :: Int, stdout :: BS.ByteString, stderr :: BS.By
 data Engine = Engine Manager String
 newtype Deadline = Deadline Word64
 
-data Environment = Environment Engine String Deadline
+data Environment = Environment Engine String Deadline (IORef Bool)
+-- Bound to one environment. The private staged executable is removed with its container.
+data Driver = Driver Environment FilePath
 
 validateCommand :: Command -> IO ()
 validateCommand c = do
@@ -169,7 +170,7 @@ demux next outputs = loop BS.empty
           consume stream (remaining - fromIntegral count) rest
 
 run :: Environment -> Command -> IO Result
-run (Environment engine container deadline) command = do
+run (Environment engine container deadline _) command = do
   validateCommand command
   outputs <- newIORef (Output BS.empty BS.empty)
   let execute = bounded deadline $ do

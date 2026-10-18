@@ -38,7 +38,9 @@ export default defineConfig({
         dependsOn: ['fix:vp', 'fix:nixfmt'],
       },
       pree2e: {
-        command: 'docker build --tag e2e-example:local fixtures/cli',
+        command:
+          'docker build --tag e2e-example:local fixtures/cli && docker build --target nonroot --tag e2e-example-nonroot:local fixtures/cli',
+        dependsOn: ['@totto2727/caseyard-go#build:driver'],
         cache: false,
       },
       ci: { command: '', dependsOn: ['check'] },

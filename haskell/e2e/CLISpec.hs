@@ -2,54 +2,270 @@
 module CLISpec (spec) where
 
 import Prelude hiding (readFile, writeFile)
-import Control.Exception (finally)
+import Control.Exception (AsyncException(ThreadKilled), finally, throwIO)
 import Control.Monad (forM_)
 import Data.Aeson hiding (Result)
+import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString as BS
+import Data.List (isInfixOf)
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC.Clock (getMonotonicTimeNSec)
-import Test.Hspec
+import Test.Hspec hiding (before, after)
 import Test.CLI.E2E
-import Test.CLI.E2E.Internal (withEngine, newDeadline, bounded, jsonRequest, identifier)
+import Test.CLI.E2E.Internal (withEngine, newDeadline, bounded, jsonRequest, identifier, encodeSegment)
 
 spec :: Spec
 spec = describe "caller-built Docker image" $ do
   it "greeting" $ auditedEnvironment $ \e ->
-    checkCommand e (command ["echo", "hello from e2e"]) (Result 0 "hello from e2e\n" "")
+    run e (command ["echo", "hello from e2e"]) `shouldReturn` Result 0 "hello from e2e\n" ""
 
   it "file workflow" $ auditedEnvironment $ \e -> do
-    checkCommand e (command ["sh", "-c", "echo first > /workspace/result.txt"]) (Result 0 "" "")
-    checkCommand e (command ["sh", "-c", "echo second >> /workspace/result.txt"]) (Result 0 "" "")
-    checkCommand e (command ["cat", "/workspace/result.txt"]) (Result 0 "first\nsecond\n" "")
-    checkFile e "/workspace/result.txt" "first\nsecond\n"
+    run e (command ["sh", "-c", "echo first > /workspace/result.txt"]) `shouldReturn` Result 0 "" ""
+    run e (command ["sh", "-c", "echo second >> /workspace/result.txt"]) `shouldReturn` Result 0 "" ""
+    run e (command ["cat", "/workspace/result.txt"]) `shouldReturn` Result 0 "first\nsecond\n" ""
+    readFile e "/workspace/result.txt" `shouldReturn` "first\nsecond\n"
     writeFile e "/workspace/bytes" (BS.pack [0,255,10])
     readFile e "/workspace/bytes" `shouldReturn` BS.pack [0,255,10]
-    checkCommand e (command ["stat", "-c", "%a", "/workspace/bytes"]) (Result 0 "644\n" "")
+    run e (command ["stat", "-c", "%a", "/workspace/bytes"]) `shouldReturn` Result 0 "644\n" ""
 
   it "expected failure" $ auditedEnvironment $ \e ->
-    checkCommand e (command ["sh", "-c", "echo expected-failure; exit 7"]) (Result 7 "expected-failure\n" "")
+    run e (command ["sh", "-c", "echo expected-failure; exit 7"]) `shouldReturn` Result 7 "expected-failure\n" ""
 
   it "separate streams" $ auditedEnvironment $ \e -> do
     let c = Command ["sh", "-c", "printf '%s:%s\\n' \"$HOME\" \"$PWD\"; printf 'diagnostic\\n' >&2; exit 7"]
           (Just "/workspace") ["HOME=/workspace/synthetic-home"]
         expected = Result 7 "/workspace/synthetic-home:/workspace\n" "diagnostic\n"
-    checkCommand e c expected
     run e c `shouldReturn` expected
 
   it "physical paths" $ auditedEnvironment $ \e -> do
     writeFile e "/workspace/result.txt" "fixture\n"
     forM_ [["mkdir", "/workspace/directory"], ["ln", "-s", "result.txt", "/workspace/link"],
            ["ln", "-s", "missing.txt", "/workspace/dangling"], ["ln", "-s", "directory", "/workspace/dirlink"]] $ \argv ->
-      checkCommand e (command argv) (Result 0 "" "")
-    checkRegularFile e "/workspace/result.txt"
-    checkDirectory e "/workspace/directory"
-    checkMissing e "/workspace/missing.txt"
-    checkSymlink e "/workspace/link" "result.txt"
-    checkSymlink e "/workspace/dangling" "missing.txt"
-    checkMissing e "/workspace/dangling" `shouldThrow` assertion
-    checkRegularFile e "/workspace/link" `shouldThrow` assertion
-    checkDirectory e "/workspace/dirlink" `shouldThrow` assertion
-    checkSymlink e "/workspace/link" "/workspace/result.txt" `shouldThrow` assertion
+      run e (command argv) `shouldReturn` Result 0 "" ""
+    pathKind e "/workspace/result.txt" `shouldReturn` PathRegularFile
+    pathKind e "/workspace/directory" `shouldReturn` PathDirectory
+    pathKind e "/workspace/missing.txt" `shouldReturn` PathMissing
+    pathKind e "/workspace/link" `shouldReturn` PathSymlink
+    pathKind e "/workspace/dangling" `shouldReturn` PathSymlink
+    pathKind e "/workspace/dirlink" `shouldReturn` PathSymlink
+    readSymlink e "/workspace/link" `shouldReturn` "result.txt"
+    readSymlink e "/workspace/dangling" `shouldReturn` "missing.txt"
+    readSymlink e "/workspace/dirlink" `shouldReturn` "directory"
+
+  it "filesystem snapshots" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    writeFile e "/workspace/bytes" (BS.pack [0,255,13,10])
+    writeFile e "/workspace/settings with spaces.json" "{\"selected\":true}\n"
+    writeFile e "/workspace/empty" ""
+    writeFile e "/workspace/deleted" "remove"
+    run e (command ["sh", "-c", "mkdir /workspace/directory; ln -s bytes /workspace/link; ln -s absent /workspace/dangling"]) `shouldReturn` Result 0 "" ""
+    let paths = ["/workspace/missing", "/workspace/link", "/workspace/dangling", "/workspace/directory", "/workspace/bytes",
+          "/workspace/settings with spaces.json", "/workspace/empty", "/workspace/deleted"]
+    before <- captureSnapshot capability paths
+    snapshotEntries before `shouldBe` Map.fromList
+      [("/workspace/bytes", RegularFile (BS.pack [0,255,13,10])), ("/workspace/directory", Directory),
+       ("/workspace/link", Symlink "bytes"), ("/workspace/dangling", Symlink "absent"), ("/workspace/missing", Missing),
+       ("/workspace/settings with spaces.json", RegularFile "{\"selected\":true}\n"), ("/workspace/empty", RegularFile ""),
+       ("/workspace/deleted", RegularFile "remove")]
+    captureSnapshot capability paths `shouldReturn` before
+    run e (command ["sh", "-c", "touch /workspace/directory/ignored; chmod 600 /workspace/bytes"]) `shouldReturn` Result 0 "" ""
+    captureSnapshot capability paths `shouldReturn` before
+    writeFile e "/workspace/bytes" (BS.pack [0,254,13,10])
+    writeFile e "/workspace/settings with spaces.json" "{ \"selected\": true }\n"
+    run e (command ["rm", "/workspace/deleted"]) `shouldReturn` Result 0 "" ""
+    run e (command ["sh", "-c", "rmdir /workspace/missing 2>/dev/null; mkdir /workspace/missing; rm /workspace/link; ln -s ./bytes /workspace/link; rm -r /workspace/directory; ln -s missing /workspace/directory"]) `shouldReturn` Result 0 "" ""
+    after <- captureSnapshot capability paths
+    snapshotEntries after `shouldBe` Map.fromList
+      [("/workspace/bytes", RegularFile (BS.pack [0,254,13,10])), ("/workspace/directory", Symlink "missing"),
+       ("/workspace/link", Symlink "./bytes"), ("/workspace/dangling", Symlink "absent"), ("/workspace/missing", Directory),
+       ("/workspace/settings with spaces.json", RegularFile "{ \"selected\": true }\n"), ("/workspace/empty", RegularFile ""),
+       ("/workspace/deleted", Missing)]
+    captureSnapshot capability paths `shouldReturn` after
+    readFile e "/workspace/bytes" `shouldReturn` BS.pack [0,254,13,10]
+
+  it "snapshot rejects unsupported physical kinds" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    run e (command ["mkfifo", "/workspace/fifo"]) `shouldReturn` Result 0 "" ""
+    pathKind e "/workspace/fifo" `shouldReturn` PathOther
+    captureSnapshot capability ["/workspace/fifo"] `shouldThrow` infrastructureError
+
+  it "snapshot does not treat a non-directory parent as absence" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    writeFile e "/workspace/file" "bytes"
+    captureSnapshot capability ["/workspace/file/child"] `shouldThrow` infrastructureError
+
+  it "terminal raw bytes and restoration" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    let input = "\ESC[A\ESC[B\ESC[C\ESC[D \r\ESC" <> BS.pack [4,3]
+        script = "saved=$(stty -g); stty raw -echo; printf '\\033[?25lprompt\\033[0m' >&2; dd bs=1 count=" ++ show (BS.length input) ++ " of=/workspace/input 2>/dev/null; stty \"$saved\"; printf '\\033[?25h' >&2; printf '%s:%s' \"$PWD\" \"$TOKEN\"; printf '\\000\\377'"
+    withTerminal capability (Command ["sh", "-c", script] (Just "/workspace") ["TOKEN=custom"]) defaultTerminalOptions $ \terminal -> do
+      ready <- expectTerminal terminal TerminalOutput "\ESC[?25lprompt\ESC[0m" 5
+      terminalStatus ready `shouldBe` TerminalRunning
+      terminalTermiosRestored ready `shouldBe` False
+      _ <- sendTerminal terminal input
+      finished <- waitTerminal terminal 5
+      terminalStdout finished `shouldBe` ("/workspace:custom" <> BS.pack [0,255])
+      terminalOutput finished `shouldBe` "\ESC[?25lprompt\ESC[0m\ESC[?25h"
+      terminalUnreadInput finished `shouldBe` BS.empty
+      terminalStatus finished `shouldBe` TerminalExited 0
+      terminalTermiosRestored finished `shouldBe` True
+      terminalCurrentTermios finished `shouldBe` terminalInitialTermios finished
+      readFile e "/workspace/input" `shouldReturn` input
+
+  forM_ ["xterm-256color", "caseyard-unsupported"] $ \term ->
+    it ("terminal preserves argv cwd HOME and TERM=" ++ term) $ auditedEnvironment $ \e -> do
+      capability <- installedDriver e
+      let invocation = Command ["sh", "-c", "printf '<%s><%s><%s><%s><%s>' \"$1\" \"$2\" \"$PWD\" \"$HOME\" \"$TERM\"", "caseyard", "two words", ""]
+            (Just "/workspace") ["HOME=/workspace/synthetic-home", "TERM=" ++ term]
+      withTerminal capability invocation defaultTerminalOptions $ \terminal -> do
+        finished <- waitTerminal terminal 5
+        terminalStdout finished `shouldBe` B8.pack ("<two words><></workspace></workspace/synthetic-home><" ++ term ++ ">")
+        terminalOutput finished `shouldBe` BS.empty
+        terminalStatus finished `shouldBe` TerminalExited 0
+        terminalTermiosRestored finished `shouldBe` True
+
+  it "terminal external SIGINT reaches the foreground process group" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    let script = "saved=$(stty -g); trap 'stty \"$saved\"; printf \"\\033[?25hinterrupted\" >&2; exit 7' INT; stty -echo; printf '\\033[?25lready' >&2; read -r ignored"
+    withTerminal capability (command ["sh", "-c", script]) defaultTerminalOptions $ \terminal -> do
+      ready <- expectTerminal terminal TerminalOutput "ready" 5
+      terminalTermiosRestored ready `shouldBe` False
+      _ <- signalTerminal terminal Interrupt
+      finished <- waitTerminal terminal 5
+      terminalStdout finished `shouldBe` BS.empty
+      terminalOutput finished `shouldBe` "\ESC[?25lready\ESC[?25hinterrupted"
+      terminalStatus finished `shouldBe` TerminalExited 7
+      terminalTermiosRestored finished `shouldBe` True
+      terminalCurrentTermios finished `shouldBe` terminalInitialTermios finished
+
+  it "terminal prompt matching spans observations and consumes repeated matches" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    let script = "saved=$(stty -g); stty -echo; printf pro >&2; printf prefix-ready; read -r first; printf 'mpt> tail' >&2; read -r second; printf 'prompt> ' >&2; read -r final; stty \"$saved\""
+    withTerminal capability (command ["sh", "-c", script]) defaultTerminalOptions $ \terminal -> do
+      _ <- expectTerminal terminal StandardOutput "prefix-ready" 5
+      expectTerminal terminal TerminalOutput "prompt> " 0.1 `shouldThrow` (\failure -> case failure of
+        TerminalFailed _ (Just observed) -> terminalOutput observed == "pro" && terminalStatus observed == TerminalRunning
+        _ -> False)
+      _ <- sendTerminal terminal "first\n"
+      _ <- expectTerminal terminal TerminalOutput "prompt> " 5
+      _ <- expectTerminal terminal TerminalOutput "tail" 5
+      started <- getMonotonicTimeNSec
+      expectTerminal terminal TerminalOutput "prompt> " 0.1 `shouldThrow` (\failure -> case failure of
+        TerminalFailed message (Just observed) -> "terminal" `isInfixOf` message && "bytes" `isInfixOf` message &&
+          terminalStatus observed == TerminalRunning && terminalOutput observed == "prompt> tail"
+        _ -> False)
+      finishedExpectation <- getMonotonicTimeNSec
+      let seconds = fromIntegral (finishedExpectation - started) / 1000000000 :: Double
+      seconds `shouldSatisfy` (< 5)
+      _ <- sendTerminal terminal "second\n"
+      _ <- expectTerminal terminal TerminalOutput "prompt> " 5
+      _ <- sendTerminal terminal "finish\n"
+      finished <- waitTerminal terminal 5
+      terminalStdout finished `shouldBe` "prefix-ready"
+      terminalOutput finished `shouldBe` "prompt> tailprompt> "
+      terminalStatus finished `shouldBe` TerminalExited 0
+      terminalTermiosRestored finished `shouldBe` True
+
+  it "terminal tiny geometry recovers before draining long output" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    writeFile e "/workspace/state" "unchanged"
+    baseline <- captureSnapshot capability ["/workspace/state"]
+    let script = "saved=$(stty -g); stty -echo; printf tiny >&2; read -r action; stty size >&2; read -r action; head -c 131072 /dev/zero | tr '\\000' x; printf '<end>'; stty \"$saved\""
+    withTerminal capability (command ["sh", "-c", script])
+      defaultTerminalOptions { terminalRows = 1, terminalColumns = 8 } $ \terminal -> do
+        _ <- expectTerminal terminal TerminalOutput "tiny" 5
+        tiny <- observeTerminal terminal
+        terminalStatus tiny `shouldBe` TerminalRunning
+        terminalStdout tiny `shouldBe` BS.empty
+        captureSnapshot capability (Map.keys (snapshotEntries baseline)) `shouldReturn` baseline
+        _ <- resizeTerminal terminal 24 80
+        _ <- sendTerminal terminal "size\n"
+        _ <- expectTerminal terminal TerminalOutput "24 80\r\n" 5
+        _ <- sendTerminal terminal "recover\n"
+        _ <- expectTerminal terminal StandardOutput "<end>" 5
+        finished <- waitTerminal terminal 5
+        terminalStdout finished `shouldBe` (BS.replicate 131072 120 <> "<end>")
+        terminalStatus finished `shouldBe` TerminalExited 0
+        terminalTermiosRestored finished `shouldBe` True
+    captureSnapshot capability (Map.keys (snapshotEntries baseline)) `shouldReturn` baseline
+
+  it "terminal callback cancellation preserves filesystem snapshot" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    writeFile e "/workspace/state" (BS.pack [0,255,10])
+    baseline <- captureSnapshot capability ["/workspace/state"]
+    withTerminal capability (command ["sh", "-c", "echo $$ > /workspace/cancelled.pid; printf ready >&2; sleep infinity"])
+      defaultTerminalOptions (\terminal -> do
+        _ <- expectTerminal terminal TerminalOutput "ready" 5
+        throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
+    captureSnapshot capability (Map.keys (snapshotEntries baseline)) `shouldReturn` baseline
+    run e (command ["sh", "-c", "! kill -0 $(cat /workspace/cancelled.pid) 2>/dev/null"]) `shouldReturn` Result 0 "" ""
+
+  it "terminal pipe input remains unread on no-op failure" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    let input = BS.pack [0,255,10]
+    withTerminal capability (command ["sh", "-c", "printf ready >&2; exit 7"])
+      defaultTerminalOptions { terminalInput = Just input } $ \terminal -> do
+        finished <- waitTerminal terminal 5
+        terminalStdout finished `shouldBe` BS.empty
+        terminalOutput finished `shouldBe` "ready"
+        terminalUnreadInput finished `shouldBe` input
+        terminalStatus finished `shouldBe` TerminalExited 7
+        terminalTermiosRestored finished `shouldBe` True
+        sendTerminal terminal "input" `shouldThrow` terminalFailureError
+
+  it "terminal pipe input delivers exact bytes and EOF" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    let input = BS.pack [0,255,13,10]
+    withTerminal capability (command ["cat"]) defaultTerminalOptions { terminalInput = Just input } $ \terminal -> do
+      finished <- waitTerminal terminal 5
+      terminalStdout finished `shouldBe` input
+      terminalOutput finished `shouldBe` BS.empty
+      terminalUnreadInput finished `shouldBe` BS.empty
+      terminalStatus finished `shouldBe` TerminalExited 0
+
+  it "terminal resize and signal" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    let script = "trap 'stty size >&2' WINCH; printf ready >&2; while :; do sleep 0.1; done"
+    withTerminal capability (command ["sh", "-c", script]) defaultTerminalOptions $ \terminal -> do
+      _ <- expectTerminal terminal TerminalOutput "ready" 5
+      _ <- resizeTerminal terminal 12 34
+      _ <- expectTerminal terminal TerminalOutput "12 34\r\n" 5
+      _ <- signalTerminal terminal Terminate
+      finished <- waitTerminal terminal 5
+      terminalStatus finished `shouldBe` TerminalSignaled 15
+      terminalStdout finished `shouldBe` BS.empty
+
+  it "terminal scope closes a surviving process group" $ auditedEnvironment $ \e -> do
+    capability <- installedDriver e
+    withTerminal capability (command ["sh", "-c", "echo $$ > /workspace/terminal.pid; printf ready >&2; sleep infinity"])
+      defaultTerminalOptions $ \terminal -> do
+        _ <- expectTerminal terminal TerminalOutput "ready" 5
+        pure ()
+    run e (command ["sh", "-c", "! kill -0 $(cat /workspace/terminal.pid) 2>/dev/null"]) `shouldReturn` Result 0 "" ""
+
+  it "nonroot image installs one driver for snapshots and terminals" $ auditedImage "e2e-example-nonroot:local" $ \e -> do
+    capability <- installedDriver e
+    run e (command ["sh", "-c", "printf owned > /tmp/state"]) `shouldReturn` Result 0 "" ""
+    captured <- captureSnapshot capability ["/tmp/state", "/tmp/absent"]
+    snapshotEntries captured `shouldBe` Map.fromList [("/tmp/state", RegularFile "owned"), ("/tmp/absent", Missing)]
+    withTerminal capability (command ["sh", "-c", "printf ready >&2; printf success"]) defaultTerminalOptions $ \terminal -> do
+      _ <- expectTerminal terminal TerminalOutput "ready" 5
+      finished <- waitTerminal terminal 5
+      terminalStdout finished `shouldBe` "success"
+      terminalOutput finished `shouldBe` "ready"
+      terminalStatus finished `shouldBe` TerminalExited 0
+      terminalTermiosRestored finished `shouldBe` True
+
+  it "nonroot snapshot inspection permission failure is not absence" $ auditedImage "e2e-example-nonroot:local" $ \e -> do
+    capability <- installedDriver e
+    run e (command ["sh", "-c", "mkdir /tmp/private; touch /tmp/private/file; chmod 000 /tmp/private"]) `shouldReturn` Result 0 "" ""
+    captureSnapshot capability ["/tmp/private/file"] `shouldThrow` infrastructureError
+
+  it "nonroot snapshot file read permission failure is not absence" $ auditedImage "e2e-example-nonroot:local" $ \e -> do
+    capability <- installedDriver e
+    run e (command ["sh", "-c", "printf secret > /tmp/unreadable; chmod 000 /tmp/unreadable"]) `shouldReturn` Result 0 "" ""
+    captureSnapshot capability ["/tmp/unreadable"] `shouldThrow` infrastructureError
 
   it "deadline" $ auditedEnvironment $ \e -> do
     started <- getMonotonicTimeNSec
@@ -61,19 +277,22 @@ spec = describe "caller-built Docker image" $ do
 -- Per-example audits run inside Hspec, so --match and --dry-run select actual work.
 -- Keep this audit suite sequential because label snapshots include other invocations.
 auditedEnvironment :: (Environment -> IO ()) -> IO ()
-auditedEnvironment use = do
-  imageBefore <- imageID
+auditedEnvironment = auditedImage "e2e-example:local"
+
+auditedImage :: String -> (Environment -> IO ()) -> IO ()
+auditedImage image use = do
+  imageBefore <- imageID image
   containersBefore <- ownedIDs
-  withEnvironment "e2e-example:local" (\environment -> do
+  withEnvironment image (\environment -> do
     containerID environment `shouldSatisfy` (`Set.notMember` containersBefore)
     use environment) `finally` do
       ownedIDs `shouldReturn` containersBefore
-      imageID `shouldReturn` imageBefore
+      imageID image `shouldReturn` imageBefore
 
-imageID :: IO String
-imageID = withEngine $ \engine -> do
+imageID :: String -> IO String
+imageID image = withEngine $ \engine -> do
   deadline <- newDeadline 30
-  bounded deadline $ jsonRequest engine "GET" "/images/e2e-example%3Alocal/json" Null identifier
+  bounded deadline $ jsonRequest engine "GET" ("/images/" ++ encodeSegment image ++ "/json") Null identifier
 
 ownedIDs :: IO (Set.Set String)
 ownedIDs = withEngine $ \engine -> do
@@ -87,9 +306,23 @@ ownedIDs = withEngine $ \engine -> do
 command :: [String] -> Command
 command argv = Command argv Nothing []
 
-assertion :: E2EError -> Bool
-assertion (AssertionFailed _) = True
-assertion _ = False
+installedDriver :: Environment -> IO Driver
+installedDriver environment = do
+  architecture <- run environment (command ["uname", "-m"])
+  suffix <- case architecture of
+    Result 0 "aarch64\n" "" -> pure "arm64"
+    Result 0 "x86_64\n" "" -> pure "amd64"
+    other -> throwIO (Infrastructure ("unsupported acceptance architecture: " ++ show other))
+  bytes <- BS.readFile ("../go/target/driver-linux-" ++ suffix)
+  installDriver environment bytes
+
+terminalFailureError :: TerminalError -> Bool
+terminalFailureError _ = True
+
+infrastructureError :: E2EError -> Bool
+infrastructureError (Infrastructure _) = True
+infrastructureError _ = False
+
 deadlineError :: E2EError -> Bool
 deadlineError (DeadlineExceeded _) = True
 deadlineError _ = False

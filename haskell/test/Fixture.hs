@@ -3,7 +3,7 @@ module Fixture where
 
 import Control.Concurrent.Async
 import Control.Concurrent.MVar
-import Control.Exception hiding (AssertionFailed)
+import Control.Exception
 import Control.Monad (forever, void)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B8
