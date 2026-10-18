@@ -58,7 +58,7 @@ async function installFixtureDriver(env: Environment): Promise<void> {
 
 const empty = { exitCode: 0, stdout: '', stderr: '' }
 
-test.concurrent('greeting', async (context) => {
+test.concurrent('greeting', async ({ expect, signal }) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -69,11 +69,11 @@ test.concurrent('greeting', async (context) => {
         stderr: '',
       })
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('file workflow', async (context) => {
+test.concurrent('file workflow', async ({ expect, signal }) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -87,11 +87,11 @@ test.concurrent('file workflow', async (context) => {
       expect(await env.readFile('/workspace/binary')).toEqual(bytes)
       await env.checkCommand({ args: ['stat', '-c', '%a', '/workspace/binary'] }, { ...empty, stdout: '644\n' })
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('expected failure', async (context) => {
+test.concurrent('expected failure', async ({ signal }) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -101,11 +101,11 @@ test.concurrent('expected failure', async (context) => {
         { exitCode: 7, stdout: 'expected-failure\n', stderr: '' },
       )
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('separate streams', async (context) => {
+test.concurrent('separate streams', async ({ signal }) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -119,11 +119,11 @@ test.concurrent('separate streams', async (context) => {
         { exitCode: 7, stdout: '/workspace/synthetic-home:/workspace\n', stderr: 'diagnostic\n' },
       )
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('physical paths', async (context) => {
+test.concurrent('physical paths', async ({ expect, signal }) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -147,11 +147,11 @@ test.concurrent('physical paths', async (context) => {
       await expect(env.checkDirectory('/workspace/directory-link')).rejects.toThrow()
       await expect(env.checkSymlink('/workspace/link', '/workspace/result.txt')).rejects.toThrow()
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('deadline', async (context) => {
+test.concurrent('deadline', async ({ expect, signal }) => {
   const started = Date.now()
   await expect(
     withEnvironment(
@@ -165,12 +165,15 @@ test.concurrent('deadline', async (context) => {
         })
         expect(Date.now() - started).toBeLessThan(70_000)
       },
-      context.signal,
+      signal,
     ),
   ).rejects.toBeInstanceOf(DeadlineError)
 })
 
-test.concurrent('filesystem snapshots preserve physical kinds and diagnose sorted changes', async (context) => {
+test.concurrent('filesystem snapshots preserve physical kinds and diagnose sorted changes', async ({
+  expect,
+  signal,
+}) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -228,11 +231,14 @@ test.concurrent('filesystem snapshots preserve physical kinds and diagnose sorte
         state: { kind: 'file', bytes: Buffer.from([0, 255, 10, 13]) },
       })
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('filesystem snapshots reject special files and non-directory path errors', async (context) => {
+test.concurrent('filesystem snapshots reject special files and non-directory path errors', async ({
+  expect,
+  signal,
+}) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -243,11 +249,11 @@ test.concurrent('filesystem snapshots reject special files and non-directory pat
       await env.writeFile('/workspace/file', Buffer.from('file'))
       await expect(env.snapshot(['/workspace/file/child'])).rejects.toThrow(/not a directory/i)
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('filesystem snapshots preserve arbitrary literal link target bytes', async (context) => {
+test.concurrent('filesystem snapshots preserve arbitrary literal link target bytes', async ({ expect, signal }) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -258,11 +264,14 @@ test.concurrent('filesystem snapshots preserve arbitrary literal link target byt
         { path: '/workspace/raw-link', state: { kind: 'symlink', target: Buffer.from([255]) } },
       ])
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('terminal keeps raw stdout separate and observes restored termios after input', async (context) => {
+test.concurrent('terminal keeps raw stdout separate and observes restored termios after input', async ({
+  expect,
+  signal,
+}) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -288,11 +297,14 @@ test.concurrent('terminal keeps raw stdout separate and observes restored termio
         expect(done.currentTermios).toEqual(done.initialTermios)
       })
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('terminal finite pipe input reports unread bytes and application failure', async (context) => {
+test.concurrent('terminal finite pipe input reports unread bytes and application failure', async ({
+  expect,
+  signal,
+}) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -314,11 +326,14 @@ test.concurrent('terminal finite pipe input reports unread bytes and application
         },
       )
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('non-root images install executable drivers without changing ordinary file modes', async (context) => {
+test.concurrent('non-root images install executable drivers without changing ordinary file modes', async ({
+  expect,
+  signal,
+}) => {
   const nonrootImage = 'e2e-example-nonroot:local'
   const original = await docker('image', 'inspect', '--format', '{{.Id}}', nonrootImage)
   await withEnvironment(
@@ -339,12 +354,15 @@ test.concurrent('non-root images install executable drivers without changing ord
         expect(result.status).toEqual({ kind: 'exited', code: 0 })
       })
     },
-    context.signal,
+    signal,
   )
   expect(await docker('image', 'inspect', '--format', '{{.Id}}', nonrootImage)).toBe(original)
 })
 
-test.concurrent('terminal resize reaches the foreground process and retains trailing matches', async (context) => {
+test.concurrent('terminal resize reaches the foreground process and retains trailing matches', async ({
+  expect,
+  signal,
+}) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -369,11 +387,14 @@ test.concurrent('terminal resize reaches the foreground process and retains trai
         },
       )
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('terminal expectation timeout retains diagnostics and literal Ctrl-D supplies EOF', async (context) => {
+test.concurrent('terminal expectation timeout retains diagnostics and literal Ctrl-D supplies EOF', async ({
+  expect,
+  signal,
+}) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -393,11 +414,14 @@ test.concurrent('terminal expectation timeout retains diagnostics and literal Ct
         expect(result.termiosRestored).toBe(true)
       })
     },
-    context.signal,
+    signal,
   )
 })
 
-test.concurrent('terminal signals and callback failure clean up a surviving process and invalidate handles', async (context) => {
+test.concurrent('terminal signals and callback failure clean up a surviving process and invalidate handles', async ({
+  expect,
+  signal,
+}) => {
   await withEnvironment(
     image,
     async (env) => {
@@ -426,6 +450,6 @@ test.concurrent('terminal signals and callback failure clean up a surviving proc
       expect((await env.run({ args: ['sh', '-c', 'kill -0 "$(cat /workspace/terminal-pid)"'] })).exitCode).not.toBe(0)
       await env.checkCommand({ args: ['sh', '-c', 'find /tmp -maxdepth 1 -name "caseyard-pty-*" -print'] }, empty)
     },
-    context.signal,
+    signal,
   )
 })
