@@ -202,7 +202,7 @@ mod tests {
                 target: b"missing".to_vec(),
             },
         );
-        assert!(before.differences(&before).is_empty());
+        assert_eq!(before.differences(&before), []);
         let differences = before.differences(&after);
         assert_eq!(
             differences

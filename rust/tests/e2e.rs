@@ -282,7 +282,7 @@ async fn terminal_tiny_recovery_long_output_and_screen_restoration()
             session.send(b"\r").await?;
             let tiny = session.expect(TerminalChannel::Terminal, b"1 8\nignored", Duration::from_secs(5)).await?;
             assert_eq!(tiny.status, TerminalStatus::Running);
-            assert!(tiny.stdout.is_empty());
+            assert_eq!(tiny.stdout, b"");
             checks.check_snapshot(&expected_baseline).await?;
             session.resize(40, 120).await?;
             session.send(b"\x1b[B").await?;
@@ -320,7 +320,7 @@ async fn terminal_cancel_and_interrupt_restore_termios_screen_and_cursor()
                 else { session.signal(TerminalSignal::Interrupt).await?; }
                 session.wait(Duration::from_secs(5)).await
             }).await?;
-            assert!(observed.stdout.is_empty());
+            assert_eq!(observed.stdout, b"");
             assert_eq!(observed.terminal, b"\x1b[?1049h\x1b[?25lready\x1b[?25h\x1b[?1049l");
             assert!(observed.termios_restored);
             assert_eq!(observed.initial_termios, observed.current_termios);
@@ -362,7 +362,7 @@ async fn terminal_pipe_input_unread_bytes_and_signal_are_observable()
             .await?;
         assert_eq!(observed.status, TerminalStatus::Exited { code: 7 });
         assert_eq!(observed.unread_input, [0, 255, 4]);
-        assert!(observed.stdout.is_empty());
+        assert_eq!(observed.stdout, b"");
         let observed = env
             .with_terminal(
                 Command::new(["cat"]),
@@ -375,8 +375,8 @@ async fn terminal_pipe_input_unread_bytes_and_signal_are_observable()
             .await?;
         assert_eq!(observed.status, TerminalStatus::Exited { code: 0 });
         assert_eq!(observed.stdout, [0, 255, 10]);
-        assert!(observed.terminal.is_empty());
-        assert!(observed.unread_input.is_empty());
+        assert_eq!(observed.terminal, b"");
+        assert_eq!(observed.unread_input, b"");
         let observed = env
             .with_terminal(
                 Command::new(["sh", "-c", "printf ready >&2; exec sleep infinity"]),
