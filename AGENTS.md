@@ -35,7 +35,7 @@ Do not retain dated verification reports, migration tables, or progress logs in 
 
 Run root tasks from the repository root.
 Enter `nix develop` for repository tools, or select `nix develop .#go`, `.#haskell`, `.#typescript`, or `.#rust` for standalone native work.
-Nix provides GHC, Cabal, and native build dependencies such as zlib.
+Nix provides GHC, Cabal, hpack, and native build dependencies such as zlib.
 Cabal owns Haskell library dependencies.
 Nix provides `rustup`.
 `rust/rust-toolchain.toml` owns the Rust toolchain and components.
@@ -120,7 +120,7 @@ Standalone language Docker commands require the prebuilt fixture image.
 | Working directory | Native selection                                                        | Docker selection                                                         |
 | ----------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | `go/`             | `go test -race ./...`                                                   | `go test -race -tags=e2e ./e2e`                                          |
-| `haskell/`        | `cabal test native`                                                     | `cabal test -fdocker-e2e docker-e2e`                                     |
+| `haskell/`        | `just test`                                                             | `just e2e`                                                               |
 | `typescript/`     | `vp test run --project native`; package imports use `--project package` | `vp test run --project docker`                                           |
 | `rust/`           | `cargo test --locked --all-features`                                    | `cargo test --locked --all-features --test e2e -- --ignored --nocapture` |
 
@@ -183,6 +183,10 @@ Go's framework controls parallelism through `t.Parallel` and `-parallel`.
 
 ### Haskell
 
+Cabal owns package dependencies and hpack generates package metadata.
+Edit `haskell/hpack.yaml` and run `just generate` in `haskell/` to regenerate `caseyard.cabal` with hpack.
+The explicit filename avoids pnpm treating hpack's dependencies as a Node package manifest.
+Commit both manifests so Cabal consumers do not need hpack.
 `just ci` in `haskell/` runs Cabal builds, manifest checks, and native Hspec tests.
 `cabal.project` supplies warnings-as-errors and direct test reporting.
 Each spec module exports `spec :: Spec`; one-line `Spec.hs` entrypoints use the declared `hspec-discover` build tool.

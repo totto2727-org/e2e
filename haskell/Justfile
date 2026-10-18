@@ -2,19 +2,23 @@ default:
     @just --list
 
 # Use the root Nix shell before these recipes.
-check:
+check: generate
     cabal build -fdocker-e2e lib:caseyard test:native test:docker-e2e
     # No release maintainer is declared.
     cabal check --ignore=no-maintainer
 
-build:
+build: generate
     cabal build lib:caseyard
 
-test:
+test: generate
     cabal test native
 
 # The caller must build e2e-example:local before this explicit task.
-e2e:
+e2e: generate
     cabal test -fdocker-e2e docker-e2e
 
 ci: check build test
+
+# Keep the checked-in Cabal manifest usable without hpack in consumer projects.
+generate:
+    hpack hpack.yaml
