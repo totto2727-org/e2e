@@ -3,8 +3,9 @@ default:
 
 ghc-version := "9.10.3"
 cabal-version := "3.16.1.0"
-# Nix's SDK-only DEVELOPER_DIR hides Apple's compiler tools from bindist GHC.
-ghcup := if os() == "macos" { "env -u DEVELOPER_DIR ghcup" } else { "ghcup" }
+# Bindist GHC must use host tools, not Nix's newer Linux libc.
+# Nix's SDK-only DEVELOPER_DIR hides Apple's compiler tools on macOS.
+ghcup := if os() == "macos" { "env -u DEVELOPER_DIR ghcup" } else { 'env -u CC -u CXX -u LD -u PKG_CONFIG -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR -u NIX_CFLAGS_COMPILE -u NIX_LDFLAGS PATH=/usr/bin:/bin "$(command -v ghcup)"' }
 cabal := ghcup + " run --ghc " + ghc-version + " --cabal " + cabal-version + " -- cabal"
 
 # Install the pinned tools without changing the user's global selections.

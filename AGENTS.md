@@ -35,7 +35,8 @@ Do not retain dated verification reports, migration tables, or progress logs in 
 
 Run root tasks from the repository root.
 Enter `nix develop` for repository tools, or select `nix develop .#go`, `.#haskell`, `.#typescript`, or `.#rust` for standalone native work.
-Nix provides hpack and native build dependencies such as zlib; ghcup provides GHC and Cabal.
+GHCup provides GHC and Cabal. Nix provides hpack and Darwin native dependencies.
+On Linux, install host GCC, pkg-config, GMP and zlib development packages. Haskell tasks use host tools to avoid mixing the GHCup bindist's libc with Nix libc.
 Cabal owns Haskell library dependencies.
 Nix provides `rustup`.
 `rust/rust-toolchain.toml` owns the Rust toolchain and components.
