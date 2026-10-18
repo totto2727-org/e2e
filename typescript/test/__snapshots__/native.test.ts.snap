@@ -1,0 +1,48 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Filesystem snapshots > exposes sorted plain state for framework equality and saved snapshots 1`] = `
+{
+  "entries": [
+    {
+      "path": "/content",
+      "state": {
+        "bytes": {
+          "data": [
+            0,
+            255,
+            13,
+            10,
+          ],
+          "type": "Buffer",
+        },
+        "kind": "file",
+      },
+    },
+    {
+      "path": "/directory",
+      "state": {
+        "kind": "directory",
+      },
+    },
+    {
+      "path": "/missing",
+      "state": {
+        "kind": "missing",
+      },
+    },
+    {
+      "path": "/target",
+      "state": {
+        "kind": "symlink",
+        "target": {
+          "data": [
+            255,
+            10,
+          ],
+          "type": "Buffer",
+        },
+      },
+    },
+  ],
+}
+`;

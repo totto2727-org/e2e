@@ -79,32 +79,10 @@ func TestEnvironmentRun_preserves_partial_result_and_error(t *testing.T) {
 	}
 }
 
-func TestEnvironmentCheckFile_accepts_exact_content(t *testing.T) {
-	container := &fakeContainer{file: io.NopCloser(strings.NewReader("content\n"))}
-	environment := &Environment{ctx: t.Context(), container: container}
-
-	if err := environment.CheckFile("/workspace/result.txt", []byte("content\n")); err != nil {
-		t.Fatal(err)
-	}
-	if container.readPath != "/workspace/result.txt" {
-		t.Fatalf("path=%q", container.readPath)
-	}
-}
-
-func TestEnvironmentCheckFile_rejects_mismatch(t *testing.T) {
-	container := &fakeContainer{file: io.NopCloser(strings.NewReader("actual\n"))}
-	environment := &Environment{ctx: t.Context(), container: container}
-
-	if err := environment.CheckFile("/workspace/result.txt", []byte("expected\n")); err == nil {
-		t.Fatal("expected mismatch")
-	}
-}
-
-func TestEnvironmentCheckFile_reports_close_failure(t *testing.T) {
+func TestEnvironmentReadFile_reports_close_failure(t *testing.T) {
 	container := &fakeContainer{file: closeErrorReader{Reader: strings.NewReader("content\n")}}
 	environment := &Environment{ctx: t.Context(), container: container}
-
-	if err := environment.CheckFile("/workspace/result.txt", []byte("content\n")); err == nil {
+	if _, err := environment.ReadFile("/workspace/result.txt"); err == nil {
 		t.Fatal("expected close failure")
 	}
 }

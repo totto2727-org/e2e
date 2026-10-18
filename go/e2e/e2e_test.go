@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -15,12 +16,14 @@ import (
 func TestStdoutScenario(t *testing.T) {
 	t.Parallel()
 	environment := cli.NewEnvironment(t, "e2e-example:local")
-	if err := environment.CheckCommand(cli.Command{Args: []string{"echo", "hello from e2e"}}, cli.Result{
+	if result, err := environment.Run(cli.Command{Args: []string{"echo", "hello from e2e"}}); err != nil {
+		t.Fatal(err)
+	} else if want := (cli.Result{
 		ExitCode: 0,
 		Stdout:   "hello from e2e\n",
 		Stderr:   "",
-	}); err != nil {
-		t.Fatal(err)
+	}); result != want {
+		t.Fatalf("result=%#v want=%#v", result, want)
 	}
 }
 
@@ -36,34 +39,44 @@ func TestFileOutputScenario(t *testing.T) {
 		{command: cli.Command{Args: []string{"cat", "/workspace/result.txt"}}, want: cli.Result{ExitCode: 0, Stdout: "first\nsecond\n", Stderr: ""}},
 	}
 	for _, command := range commands {
-		if err := environment.CheckCommand(command.command, command.want); err != nil {
+		if result, err := environment.Run(command.command); err != nil {
 			t.Fatal(err)
+		} else if want := command.want; result != want {
+			t.Fatalf("result=%#v want=%#v", result, want)
 		}
 	}
-	if err := environment.CheckFile("/workspace/result.txt", []byte("first\nsecond\n")); err != nil {
+	if data, err := environment.ReadFile("/workspace/result.txt"); err != nil {
 		t.Fatal(err)
+	} else if want := []byte("first\nsecond\n"); !bytes.Equal(data, want) {
+		t.Fatalf("content=%q want=%q", data, want)
 	}
 	binary := []byte{0, 255, '\n'}
 	if err := environment.WriteFile("/workspace/binary.bin", binary); err != nil {
 		t.Fatal(err)
 	}
-	if err := environment.CheckFile("/workspace/binary.bin", binary); err != nil {
+	if data, err := environment.ReadFile("/workspace/binary.bin"); err != nil {
 		t.Fatal(err)
+	} else if want := binary; !bytes.Equal(data, want) {
+		t.Fatalf("content=%q want=%q", data, want)
 	}
-	if err := environment.CheckCommand(cli.Command{Args: []string{"stat", "-c", "%a", "/workspace/binary.bin"}}, cli.Result{ExitCode: 0, Stdout: "644\n"}); err != nil {
+	if result, err := environment.Run(cli.Command{Args: []string{"stat", "-c", "%a", "/workspace/binary.bin"}}); err != nil {
 		t.Fatal(err)
+	} else if want := (cli.Result{ExitCode: 0, Stdout: "644\n"}); result != want {
+		t.Fatalf("result=%#v want=%#v", result, want)
 	}
 }
 
 func TestExpectedFailureScenario(t *testing.T) {
 	t.Parallel()
 	environment := cli.NewEnvironment(t, "e2e-example:local")
-	if err := environment.CheckCommand(cli.Command{Args: []string{"sh", "-c", "echo expected-failure; exit 7"}}, cli.Result{
+	if result, err := environment.Run(cli.Command{Args: []string{"sh", "-c", "echo expected-failure; exit 7"}}); err != nil {
+		t.Fatal(err)
+	} else if want := (cli.Result{
 		ExitCode: 7,
 		Stdout:   "expected-failure\n",
 		Stderr:   "",
-	}); err != nil {
-		t.Fatal(err)
+	}); result != want {
+		t.Fatalf("result=%#v want=%#v", result, want)
 	}
 }
 
@@ -80,9 +93,6 @@ func TestSeparatedOutputScenario(t *testing.T) {
 		Stdout:   "/workspace/synthetic-home:/workspace\n",
 		Stderr:   "diagnostic\n",
 	}
-	if err := environment.CheckCommand(command, want); err != nil {
-		t.Fatal(err)
-	}
 	result, err := environment.Run(command)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +102,7 @@ func TestSeparatedOutputScenario(t *testing.T) {
 	}
 }
 
-func TestPathAssertionsScenario(t *testing.T) {
+func TestPathObservationsScenario(t *testing.T) {
 	t.Parallel()
 	environment := cli.NewEnvironment(t, "e2e-example:local")
 	if err := environment.WriteFile("/workspace/result.txt", []byte("fixture\n")); err != nil {
@@ -103,33 +113,46 @@ func TestPathAssertionsScenario(t *testing.T) {
 		{"ln", "-s", "result.txt", "/workspace/link"},
 		{"ln", "-s", "missing.txt", "/workspace/dangling"},
 		{"ln", "-s", "directory", "/workspace/directory-link"},
+		{"mkfifo", "/workspace/pipe"},
 	} {
-		if err := environment.CheckCommand(cli.Command{Args: args}, cli.Result{ExitCode: 0, Stdout: "", Stderr: ""}); err != nil {
+		if result, err := environment.Run(cli.Command{Args: args}); err != nil {
 			t.Fatal(err)
+		} else if want := (cli.Result{ExitCode: 0, Stdout: "", Stderr: ""}); result != want {
+			t.Fatalf("result=%#v want=%#v", result, want)
 		}
 	}
-	for _, err := range []error{
-		environment.CheckRegularFile("/workspace/result.txt"),
-		environment.CheckDirectory("/workspace/directory"),
-		environment.CheckMissing("/workspace/missing.txt"),
-		environment.CheckSymlink("/workspace/link", "result.txt"),
-		environment.CheckSymlink("/workspace/dangling", "missing.txt"),
+	for _, test := range []struct {
+		path string
+		want cli.PathKind
+	}{
+		{"/workspace/result.txt", cli.PathFile},
+		{"/workspace/directory", cli.PathDirectory},
+		{"/workspace/missing.txt", cli.PathMissing},
+		{"/workspace/link", cli.PathSymlink},
+		{"/workspace/dangling", cli.PathSymlink},
+		{"/workspace/directory-link", cli.PathSymlink},
+		{"/workspace/pipe", cli.PathOther},
 	} {
+		got, err := environment.PathKind(test.path)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if got != test.want {
+			t.Fatalf("path %q kind=%q want=%q", test.path, got, test.want)
+		}
 	}
-	if err := environment.CheckMissing("/workspace/dangling"); err == nil {
-		t.Fatal("dangling symbolic link was treated as missing")
-	}
-	if err := environment.CheckRegularFile("/workspace/link"); err == nil {
-		t.Fatal("symbolic link was treated as a physical regular file")
-	}
-	if err := environment.CheckDirectory("/workspace/directory-link"); err == nil {
-		t.Fatal("symbolic link was treated as a physical directory")
-	}
-	if err := environment.CheckSymlink("/workspace/link", "/workspace/result.txt"); err == nil {
-		t.Fatal("resolved target was accepted instead of the literal target")
+	for _, test := range []struct{ path, want string }{
+		{"/workspace/link", "result.txt"},
+		{"/workspace/dangling", "missing.txt"},
+		{"/workspace/directory-link", "directory"},
+	} {
+		got, err := environment.ReadSymlink(test.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != test.want {
+			t.Fatalf("path %q target=%q want=%q", test.path, got, test.want)
+		}
 	}
 }
 
@@ -160,14 +183,18 @@ func TestIsolationScenario(t *testing.T) {
 			t.Fatalf("hostname result=%+v want exit 0, nonempty hostname, and empty stderr", result)
 		}
 		firstHostname = result.Stdout
-		if err := environment.CheckMissing("/workspace/isolation-marker.txt"); err != nil {
+		if kind, err := environment.PathKind("/workspace/isolation-marker.txt"); err != nil {
 			t.Fatal(err)
+		} else if kind != cli.PathMissing {
+			t.Fatalf("kind=%q want=%q", kind, cli.PathMissing)
 		}
 		if err := environment.WriteFile("/workspace/isolation-marker.txt", []byte("first case\n")); err != nil {
 			t.Fatal(err)
 		}
-		if err := environment.CheckFile("/workspace/isolation-marker.txt", []byte("first case\n")); err != nil {
+		if data, err := environment.ReadFile("/workspace/isolation-marker.txt"); err != nil {
 			t.Fatal(err)
+		} else if want := []byte("first case\n"); !bytes.Equal(data, want) {
+			t.Fatalf("content=%q want=%q", data, want)
 		}
 	}) {
 		return
@@ -184,8 +211,10 @@ func TestIsolationScenario(t *testing.T) {
 		if result.Stdout == firstHostname {
 			t.Fatalf("case containers reported the same hostname: %q", result.Stdout)
 		}
-		if err := environment.CheckMissing("/workspace/isolation-marker.txt"); err != nil {
+		if kind, err := environment.PathKind("/workspace/isolation-marker.txt"); err != nil {
 			t.Fatal(err)
+		} else if kind != cli.PathMissing {
+			t.Fatalf("kind=%q want=%q", kind, cli.PathMissing)
 		}
 	})
 }

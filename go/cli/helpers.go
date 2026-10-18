@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -67,17 +66,6 @@ func validateCommand(command Command) error {
 		if strings.ContainsRune(entry, '\x00') {
 			return errors.New("command environment must not contain NUL")
 		}
-	}
-	return nil
-}
-
-func (e *Environment) CheckFile(path string, want []byte) error {
-	data, err := e.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(data, want) {
-		return fmt.Errorf("file %s: content=%q want=%q", path, data, want)
 	}
 	return nil
 }

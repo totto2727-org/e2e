@@ -1,0 +1,145 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`filesystem snapshots preserve physical kinds and save sorted changes > changed physical state 1`] = `
+{
+  "entries": [
+    {
+      "path": "/workspace/binary",
+      "state": {
+        "bytes": {
+          "data": [
+            0,
+            254,
+            10,
+            13,
+          ],
+          "type": "Buffer",
+        },
+        "kind": "file",
+      },
+    },
+    {
+      "path": "/workspace/dangling",
+      "state": {
+        "kind": "symlink",
+        "target": {
+          "data": [
+            109,
+            105,
+            115,
+            115,
+            105,
+            110,
+            103,
+          ],
+          "type": "Buffer",
+        },
+      },
+    },
+    {
+      "path": "/workspace/directory",
+      "state": {
+        "bytes": {
+          "data": [],
+          "type": "Buffer",
+        },
+        "kind": "file",
+      },
+    },
+    {
+      "path": "/workspace/link",
+      "state": {
+        "kind": "symlink",
+        "target": {
+          "data": [
+            46,
+            47,
+            98,
+            105,
+            110,
+            97,
+            114,
+            121,
+          ],
+          "type": "Buffer",
+        },
+      },
+    },
+    {
+      "path": "/workspace/missing",
+      "state": {
+        "kind": "directory",
+      },
+    },
+  ],
+}
+`;
+
+exports[`filesystem snapshots preserve physical kinds and save sorted changes > initial physical state 1`] = `
+{
+  "entries": [
+    {
+      "path": "/workspace/binary",
+      "state": {
+        "bytes": {
+          "data": [
+            0,
+            255,
+            10,
+            13,
+          ],
+          "type": "Buffer",
+        },
+        "kind": "file",
+      },
+    },
+    {
+      "path": "/workspace/dangling",
+      "state": {
+        "kind": "symlink",
+        "target": {
+          "data": [
+            109,
+            105,
+            115,
+            115,
+            105,
+            110,
+            103,
+          ],
+          "type": "Buffer",
+        },
+      },
+    },
+    {
+      "path": "/workspace/directory",
+      "state": {
+        "kind": "directory",
+      },
+    },
+    {
+      "path": "/workspace/link",
+      "state": {
+        "kind": "symlink",
+        "target": {
+          "data": [
+            98,
+            105,
+            110,
+            97,
+            114,
+            121,
+          ],
+          "type": "Buffer",
+        },
+      },
+    },
+    {
+      "path": "/workspace/missing",
+      "state": {
+        "kind": "missing",
+      },
+    },
+  ],
+}
+`;

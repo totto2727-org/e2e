@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -75,8 +76,12 @@ exit 7`}}
 		if _, err := terminal.Expect(cli.TerminalStdout, []byte("input-done"), 3*time.Second); err != nil {
 			return err
 		}
-		if err := environment.CheckFile("/workspace/raw-input", keys); err != nil {
+		data, err := environment.ReadFile("/workspace/raw-input")
+		if err != nil {
 			return err
+		}
+		if !bytes.Equal(data, keys) {
+			t.Errorf("raw input=%q want=%q", data, keys)
 		}
 		if _, err := terminal.Resize(9, 31); err != nil {
 			return err
@@ -116,8 +121,10 @@ exit 7`}}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := environment.CheckCommand(cli.Command{Args: []string{"sh", "-c", `for file in /proc/[0-9]*/stat; do read -r pid comm state rest < "$file" 2>/dev/null || continue; if [ "$comm" = '(driver)' ] && [ "$state" != Z ]; then exit 1; fi; done`}}, cli.Result{}); err != nil {
+	if result, err := environment.Run(cli.Command{Args: []string{"sh", "-c", `for file in /proc/[0-9]*/stat; do read -r pid comm state rest < "$file" 2>/dev/null || continue; if [ "$comm" = '(driver)' ] && [ "$state" != Z ]; then exit 1; fi; done`}}); err != nil {
 		t.Fatal(err)
+	} else if want := (cli.Result{}); result != want {
+		t.Fatalf("result=%#v want=%#v", result, want)
 	}
 }
 
@@ -154,7 +161,8 @@ func TestTerminalTinyGeometryNoOpAndSignalScenario(t *testing.T) {
 	if err := environment.WriteFile("/workspace/unchanged", []byte{0, 255}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := environment.Snapshot([]string{"/workspace/unchanged"})
+	paths := []string{"/workspace/unchanged"}
+	before, err := environment.Snapshot(paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,8 +170,12 @@ func TestTerminalTinyGeometryNoOpAndSignalScenario(t *testing.T) {
 		if _, err := terminal.Expect(cli.TerminalOutput, []byte("tiny"), 3*time.Second); err != nil {
 			return err
 		}
-		if err := environment.CheckSnapshot(before); err != nil {
+		after, err := environment.Snapshot(paths)
+		if err != nil {
 			return err
+		}
+		if got, want := after.Entries(), before.Entries(); !slices.Equal(got, want) {
+			t.Errorf("snapshot=%#v want=%#v", got, want)
 		}
 		if _, err := terminal.Signal("SIGTERM"); err != nil {
 			return err
@@ -186,10 +198,13 @@ func TestTerminalNonrootDriverScenario(t *testing.T) {
 	t.Parallel()
 	environment := cli.NewEnvironment(t, "e2e-example-nonroot:local")
 	installDriver(t, environment)
-	if err := environment.CheckCommand(cli.Command{Args: []string{"id", "-u"}}, cli.Result{Stdout: "65534\n"}); err != nil {
+	if result, err := environment.Run(cli.Command{Args: []string{"id", "-u"}}); err != nil {
 		t.Fatal(err)
+	} else if want := (cli.Result{Stdout: "65534\n"}); result != want {
+		t.Fatalf("result=%#v want=%#v", result, want)
 	}
-	before, err := environment.Snapshot([]string{"/etc/hostname"})
+	paths := []string{"/etc/hostname"}
+	before, err := environment.Snapshot(paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +216,14 @@ func TestTerminalNonrootDriverScenario(t *testing.T) {
 		if observed.Status != (cli.TerminalStatus{Kind: "exited"}) || string(observed.Stdout) != "nonroot" {
 			return fmt.Errorf("nonroot terminal observation=%+v", observed)
 		}
-		return environment.CheckSnapshot(before)
+		after, err := environment.Snapshot(paths)
+		if err != nil {
+			return err
+		}
+		if got, want := after.Entries(), before.Entries(); !slices.Equal(got, want) {
+			t.Errorf("snapshot=%#v want=%#v", got, want)
+		}
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -224,11 +246,15 @@ func TestTerminalWatchdogScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := environment.CheckCommand(cli.Command{Args: []string{"sh", "-c", `set -- /tmp/caseyard-pty-*; test ! -e "$1"`}}, cli.Result{}); err != nil {
+	if result, err := environment.Run(cli.Command{Args: []string{"sh", "-c", `set -- /tmp/caseyard-pty-*; test ! -e "$1"`}}); err != nil {
 		t.Fatal(err)
+	} else if want := (cli.Result{}); result != want {
+		t.Fatalf("result=%#v want=%#v", result, want)
 	}
-	if err := environment.CheckCommand(cli.Command{Args: []string{"sh", "-c", `for file in /proc/[0-9]*/stat; do read -r pid comm state rest < "$file" 2>/dev/null || continue; if [ "$comm" = '(driver)' ] && [ "$state" != Z ]; then exit 1; fi; done`}}, cli.Result{}); err != nil {
+	if result, err := environment.Run(cli.Command{Args: []string{"sh", "-c", `for file in /proc/[0-9]*/stat; do read -r pid comm state rest < "$file" 2>/dev/null || continue; if [ "$comm" = '(driver)' ] && [ "$state" != Z ]; then exit 1; fi; done`}}); err != nil {
 		t.Fatal(err)
+	} else if want := (cli.Result{}); result != want {
+		t.Fatalf("result=%#v want=%#v", result, want)
 	}
 }
 
@@ -239,7 +265,8 @@ func TestTerminalArgumentsAndEnvironmentScenario(t *testing.T) {
 			t.Parallel()
 			environment := cli.NewEnvironment(t, "e2e-example:local")
 			installDriver(t, environment)
-			before, err := environment.Snapshot([]string{"/workspace/argv-not-executed"})
+			paths := []string{"/workspace/argv-not-executed"}
+			before, err := environment.Snapshot(paths)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -265,8 +292,12 @@ func TestTerminalArgumentsAndEnvironmentScenario(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := environment.CheckSnapshot(before); err != nil {
+			after, err := environment.Snapshot(paths)
+			if err != nil {
 				t.Fatal(err)
+			}
+			if got, want := after.Entries(), before.Entries(); !slices.Equal(got, want) {
+				t.Errorf("snapshot=%#v want=%#v", got, want)
 			}
 		})
 	}
@@ -303,7 +334,8 @@ func TestTerminalSIGINTCancellationSnapshotScenario(t *testing.T) {
 	if err := environment.WriteFile("/workspace/guard", []byte{0, 255, '\n'}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := environment.Snapshot([]string{"/workspace/guard", "/workspace/should-stay-missing"})
+	paths := []string{"/workspace/guard", "/workspace/should-stay-missing"}
+	before, err := environment.Snapshot(paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,8 +374,12 @@ while :; do sleep 1; done`}}, cli.TerminalOptions{}, func(terminal *cli.Terminal
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := environment.CheckSnapshot(before); err != nil {
+	after, err := environment.Snapshot(paths)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got, want := after.Entries(), before.Entries(); !slices.Equal(got, want) {
+		t.Errorf("snapshot=%#v want=%#v", got, want)
 	}
 }
 
@@ -354,7 +390,8 @@ func TestTerminalLongOutputScrollAndTinyRecoveryScenario(t *testing.T) {
 	if err := environment.WriteFile("/workspace/scroll-guard", []byte("unchanged")); err != nil {
 		t.Fatal(err)
 	}
-	before, err := environment.Snapshot([]string{"/workspace/scroll-guard", "/workspace/scroll-no-output"})
+	paths := []string{"/workspace/scroll-guard", "/workspace/scroll-no-output"}
+	before, err := environment.Snapshot(paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,8 +437,12 @@ printf '\033[?25h' >&2`}}, cli.TerminalOptions{Rows: 24, Columns: 80}, func(term
 			if _, err := terminal.Expect(cli.TerminalOutput, []byte(step.output), 3*time.Second); err != nil {
 				return err
 			}
-			if err := environment.CheckSnapshot(before); err != nil {
+			after, err := environment.Snapshot(paths)
+			if err != nil {
 				return err
+			}
+			if got, want := after.Entries(), before.Entries(); !slices.Equal(got, want) {
+				t.Errorf("snapshot=%#v want=%#v", got, want)
 			}
 		}
 		if _, err := terminal.SendInput([]byte("\x1b[A")); err != nil {
@@ -431,7 +472,11 @@ printf '\033[?25h' >&2`}}, cli.TerminalOptions{Rows: 24, Columns: 80}, func(term
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := environment.CheckSnapshot(before); err != nil {
+	after, err := environment.Snapshot(paths)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got, want := after.Entries(), before.Entries(); !slices.Equal(got, want) {
+		t.Errorf("snapshot=%#v want=%#v", got, want)
 	}
 }

@@ -3,15 +3,14 @@
 module Test.CLI.E2E
   ( Command(..), Result(..), Output(..), E2EError(..), Environment
   , withEnvironment, containerID, Driver, installDriver
-  , run, checkCommand, writeFile, readFile, checkFile
-  , checkMissing, checkRegularFile, checkDirectory, checkSymlink
-  , SnapshotEntry(..), FileSystemSnapshot(..), SnapshotChange(..), SnapshotDifference(..)
+  , run, writeFile, readFile, PathKind(..), pathKind, readSymlink
+  , SnapshotEntry(..), FileSystemSnapshot(..)
   , module Test.CLI.E2E.Terminal
-  , captureSnapshot, diffSnapshots, checkSnapshot
+  , captureSnapshot
   ) where
 
 import Prelude hiding (readFile, writeFile)
-import Control.Exception hiding (AssertionFailed)
+import Control.Exception
 import Control.Monad (unless, void, when)
 import qualified Codec.Archive.Tar as Tar
 import qualified Codec.Archive.Tar.Entry as Tar
@@ -105,11 +104,6 @@ cleanupOwned engine@(Engine manager _) ownedName token = do
       Nothing -> pure ()
       Just ident -> void (bytesRequest engine "DELETE" ("/containers/" ++ encodeSegment ident ++ "?force=true&v=true") LBS.empty)
 
-checkCommand :: Environment -> Command -> Result -> IO ()
-checkCommand environment command expected = do
-  actual <- run environment command
-  unless (actual == expected) (throwIO (AssertionFailed ("command " ++ show command ++ ": actual=" ++ show actual ++ " expected=" ++ show expected)))
-
 writeFile :: Environment -> FilePath -> BS.ByteString -> IO ()
 writeFile = writeFileMode 0o644
 
@@ -138,11 +132,6 @@ readFile (Environment engine ident deadline _) path = do
       [bytes] -> pure bytes
       _ -> throwIO (Infrastructure "file archive must contain exactly one regular file")
 
-checkFile :: Environment -> FilePath -> BS.ByteString -> IO ()
-checkFile environment path expected = do
-  actual <- readFile environment path
-  unless (actual == expected) (throwIO (AssertionFailed ("file " ++ show path ++ ": actual=" ++ show actual ++ " expected=" ++ show expected)))
-
 probe :: Environment -> String -> FilePath -> IO Bool
 probe environment flag path = do
   result <- run environment (Command ["test", flag, path] Nothing [])
@@ -151,45 +140,37 @@ probe environment flag path = do
     1 -> pure False
     code -> throwIO (Infrastructure ("path probe exit code " ++ show code ++ ": " ++ show result))
 
-checkMissing :: Environment -> FilePath -> IO ()
-checkMissing environment path = do
-  exists <- probe environment "-e" path
-  linked <- probe environment "-L" path
-  when (exists || linked) (throwIO (AssertionFailed ("expected missing path: " ++ path)))
+data PathKind = PathMissing | PathRegularFile | PathDirectory | PathSymlink | PathOther
+  deriving (Eq, Show)
 
-checkPhysical :: Environment -> String -> FilePath -> IO ()
-checkPhysical environment flag path = do
-  matches <- probe environment flag path
-  linked <- probe environment "-L" path
-  unless (matches && not linked) (throwIO (AssertionFailed ("expected physical " ++ flag ++ " path: " ++ path)))
+validatePhysicalPath :: FilePath -> IO ()
+validatePhysicalPath path = do
+  validateString path
+  when (null path) (throwIO (InvalidInput "path must not be empty"))
 
-checkRegularFile :: Environment -> FilePath -> IO ()
-checkRegularFile environment = checkPhysical environment "-f"
+pathKind :: Environment -> FilePath -> IO PathKind
+pathKind environment path = do
+  validatePhysicalPath path
+  classify [("-L", PathSymlink), ("-f", PathRegularFile), ("-d", PathDirectory), ("-e", PathOther)]
+  where
+    classify [] = pure PathMissing
+    classify ((flag, kind):rest) = do
+      matches <- probe environment flag path
+      if matches then pure kind else classify rest
 
-checkDirectory :: Environment -> FilePath -> IO ()
-checkDirectory environment = checkPhysical environment "-d"
-
-checkSymlink :: Environment -> FilePath -> FilePath -> IO ()
-checkSymlink environment path target = do
-  linked <- probe environment "-L" path
-  unless linked (throwIO (AssertionFailed ("expected symbolic link: " ++ path)))
-  checkCommand environment (Command ["readlink", "--", path] Nothing [])
-    (Result 0 (TE.encodeUtf8 (T.pack (target ++ "\n"))) BS.empty)
+readSymlink :: Environment -> FilePath -> IO BS.ByteString
+readSymlink environment path = do
+  validatePhysicalPath path
+  result <- run environment (Command ["readlink", "--", path] Nothing [])
+  case BS.unsnoc (stdout result) of
+    Just (target, 10) | exitCode result == 0 && BS.null (stderr result) -> pure target
+    _ -> throwIO (Infrastructure ("symbolic link read failed: " ++ show result))
 
 -- A directory records its kind only. Links retain their literal, unresolved target.
 data SnapshotEntry = Missing | RegularFile BS.ByteString | Directory | Symlink BS.ByteString
   deriving (Eq, Show)
 newtype FileSystemSnapshot = FileSystemSnapshot { snapshotEntries :: Map.Map FilePath SnapshotEntry }
   deriving (Eq, Show)
-data SnapshotChange = ExistenceChanged | KindChanged | ContentChanged | TargetChanged
-  deriving (Eq, Show)
-data SnapshotDifference = SnapshotDifference
-  { differencePath :: FilePath
-  , differenceChange :: SnapshotChange
-  , differenceBefore :: Maybe SnapshotEntry
-  , differenceAfter :: Maybe SnapshotEntry
-  } deriving (Eq, Show)
-
 -- Installation is explicit. The caller selects a trusted static Linux binary
 -- for the container architecture and the environment owns its private directory.
 installDriver :: Environment -> BS.ByteString -> IO Driver
@@ -251,28 +232,3 @@ captureSnapshot (Driver environment executable) paths = do
       bytes <- parseJSON value
       unless (all (\n -> n >= (0 :: Int) && n <= 255) bytes) (fail "invalid snapshot byte array")
       pure (BS.pack (map fromIntegral bytes))
-
--- Compare the union of explicitly selected paths in deterministic path order.
--- Nothing means unselected, not an observed missing path.
-diffSnapshots :: FileSystemSnapshot -> FileSystemSnapshot -> [SnapshotDifference]
-diffSnapshots (FileSystemSnapshot before) (FileSystemSnapshot after) =
-  [ SnapshotDifference path (change old new) old new
-  | path <- Set.toAscList (Map.keysSet before `Set.union` Map.keysSet after)
-  , let old = Map.lookup path before
-  , let new = Map.lookup path after
-  , old /= new
-  ]
-  where
-    change Nothing _ = ExistenceChanged
-    change _ Nothing = ExistenceChanged
-    change (Just Missing) _ = ExistenceChanged
-    change _ (Just Missing) = ExistenceChanged
-    change (Just (RegularFile _)) (Just (RegularFile _)) = ContentChanged
-    change (Just (Symlink _)) (Just (Symlink _)) = TargetChanged
-    change _ _ = KindChanged
-
-checkSnapshot :: Driver -> FileSystemSnapshot -> IO ()
-checkSnapshot capability expected@(FileSystemSnapshot entries) = do
-  actual <- captureSnapshot capability (Map.keys entries)
-  let differences = diffSnapshots expected actual
-  unless (null differences) (throwIO (AssertionFailed ("filesystem snapshot differences: " ++ show differences)))

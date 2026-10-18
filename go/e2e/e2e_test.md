@@ -14,7 +14,7 @@ The standard `go test -parallel=2` setting controls concurrency, not the library
 
 ### Scope
 
-Check exact exit status and separate output streams through `CheckCommand`.
+Check exact exit status and separate output streams with a complete `cli.Result` comparison.
 
 ### Commands under test
 
@@ -35,7 +35,7 @@ Check exact exit status and separate output streams through `CheckCommand`.
 
 ### Execution flow
 
-1. Run argv `["echo", "hello from e2e"]` through `CheckCommand(command, want)`, with an expected `cli.Result`.
+1. Run argv `["echo", "hello from e2e"]` through `Run` and Go result equality, with an expected `cli.Result`.
 
 ### Expected results
 
@@ -81,9 +81,9 @@ Check a file workflow with multiple commands in one container.
 1. Run argv `["sh", "-c", "echo first > /workspace/result.txt"]`.
 2. Run argv `["sh", "-c", "echo second >> /workspace/result.txt"]`.
 3. Run argv `["cat", "/workspace/result.txt"]`.
-4. Call `CheckFile("/workspace/result.txt", []byte("first\nsecond\n"))` to copy and compare the file bytes.
-5. Write bytes `00 ff 0a` to `/workspace/binary.bin` through `WriteFile`, then compare them through `CheckFile`.
-6. Run argv `["stat", "-c", "%a", "/workspace/binary.bin"]` through `CheckCommand`.
+4. Call `ReadFile("/workspace/result.txt")` and compare the bytes with `first\nsecond\n` through `bytes.Equal`.
+5. Write bytes `00 ff 0a` to `/workspace/binary.bin` through `WriteFile`, then compare `ReadFile` bytes through `bytes.Equal`.
+6. Run argv `["stat", "-c", "%a", "/workspace/binary.bin"]` through `Run`.
 
 ### Expected results
 
@@ -96,7 +96,7 @@ Check a file workflow with multiple commands in one container.
 
 ### Notes
 
-- All four commands use `CheckCommand(command, want)` with exact `cli.Result` expectations in the same isolated container.
+- All four commands use `Run` and Go result equality with exact `cli.Result` expectations in the same isolated container.
 
 ## `TestExpectedFailureScenario`
 
@@ -124,7 +124,7 @@ Check that an expected nonzero command result does not fail the scenario.
 
 ### Execution flow
 
-1. Run argv `["sh", "-c", "echo expected-failure; exit 7"]` through `CheckCommand(command, want)`, expecting exit code `7`.
+1. Run argv `["sh", "-c", "echo expected-failure; exit 7"]` through `Run` and Go result equality, expecting exit code `7`.
 
 ### Expected results
 
@@ -140,7 +140,7 @@ Check that an expected nonzero command result does not fail the scenario.
 
 ### Scope
 
-Check native separate output streams, working directory, and environment through both `CheckCommand` and `Run`.
+Check separate output streams, working directory, and environment through `Run`.
 
 ### Commands under test
 
@@ -163,21 +163,21 @@ Check native separate output streams, working directory, and environment through
 
 ### Execution flow
 
-1. Run argv `["sh", "-c", "printf '%s:%s\\n' \"$HOME\" \"$PWD\"; printf 'diagnostic\\n' >&2; exit 7"]` through `CheckCommand`, with working directory `/workspace` and environment entry `HOME=/workspace/synthetic-home`.
-2. Run the same `Command` through `Run` and check its Go error before comparing the returned `Result` with the same expected value.
+1. Run argv `["sh", "-c", "printf '%s:%s\\n' \"$HOME\" \"$PWD\"; printf 'diagnostic\\n' >&2; exit 7"]` through `Run`, with working directory `/workspace` and environment entry `HOME=/workspace/synthetic-home`.
+2. Check its Go error before comparing the complete returned `Result` with the expected value.
 
 ### Expected results
 
-- Both executions succeed without a Go error and return exit code `7`.
-- Both `CheckCommand` and `Run` preserve exact stdout `/workspace/synthetic-home:/workspace\n` and stderr `diagnostic\n` separately.
+- Execution succeeds without a Go error and returns exit code `7`.
+- `Run` preserves exact stdout `/workspace/synthetic-home:/workspace\n` and stderr `diagnostic\n` separately.
 - The `Run` result equals the complete expected `cli.Result`.
 
 ### Notes
 
-- Neither API concatenates stdout and stderr.
+- The API does not concatenate stdout and stderr.
 - The test does not require chronological ordering between the streams.
 
-## `TestPathAssertionsScenario`
+## `TestPathObservationsScenario`
 
 ### Scope
 
@@ -185,12 +185,13 @@ Check physical path types, absent paths, and literal symbolic-link targets.
 
 ### Commands under test
 
-| Command path | Purpose                                                  |
-| ------------ | -------------------------------------------------------- |
-| `mkdir`      | Create a directory fixture.                              |
-| `ln`         | Create symbolic-link fixtures.                           |
-| `test`       | Check path existence and type through helper assertions. |
-| `readlink`   | Read a literal symbolic-link target through the helper.  |
+| Command path | Purpose                                                     |
+| ------------ | ----------------------------------------------------------- |
+| `mkdir`      | Create a directory fixture.                                 |
+| `ln`         | Create symbolic-link fixtures.                              |
+| `test`       | Observe path existence and physical type.                   |
+| `mkfifo`     | Create an unsupported snapshot kind for a path observation. |
+| `readlink`   | Read a literal symbolic-link target through the helper.     |
 
 ### Arguments and options
 
@@ -211,15 +212,14 @@ Check physical path types, absent paths, and literal symbolic-link targets.
 2. Run argv `["ln", "-s", "result.txt", "/workspace/link"]`.
 3. Run argv `["ln", "-s", "missing.txt", "/workspace/dangling"]`.
 4. Run argv `["ln", "-s", "directory", "/workspace/directory-link"]`.
-5. Check the regular file, directory, missing target, and literal targets `result.txt` and `missing.txt`.
-6. Confirm that `CheckMissing` rejects `/workspace/dangling`.
-7. Confirm that `CheckRegularFile` rejects `/workspace/link` and `CheckDirectory` rejects `/workspace/directory-link`.
-8. Confirm that `CheckSymlink` rejects `/workspace/result.txt` as the expected literal target of `/workspace/link`.
+5. Run argv `["mkfifo", "/workspace/pipe"]`.
+6. Compare `PathKind` values for the file, directory, missing path, all three links, and FIFO.
+7. Compare `ReadSymlink` values with literal targets `result.txt`, `missing.txt`, and `directory`.
 
 ### Expected results
 
 - All fixture commands return exit code `0` with empty stdout and stderr.
-- The positive path assertions succeed.
+- The FIFO has kind `other`.
 - A dangling link is not treated as an absent path.
 - A symbolic link to a regular file is not treated as a physical regular file.
 - A symbolic link to a directory is not treated as a physical directory.
@@ -282,18 +282,18 @@ Check that two sequential native child test scopes observe distinct container ho
 
 ### Commands under test
 
-| Command path | Purpose                                      |
-| ------------ | -------------------------------------------- |
-| `cat`        | Read the container's observed hostname.      |
-| `test`       | Check marker absence through `CheckMissing`. |
+| Command path | Purpose                                    |
+| ------------ | ------------------------------------------ |
+| `cat`        | Read the container's observed hostname.    |
+| `test`       | Observe marker absence through `PathKind`. |
 
 ### Arguments and options
 
-| Argument or option                | Purpose                                                                   |
-| --------------------------------- | ------------------------------------------------------------------------- |
-| `/etc/hostname`                   | Read the hostname supplied to each container.                             |
-| `/workspace/isolation-marker.txt` | Select the marker written only in the first child scope.                  |
-| `-e`, `-L`                        | Probe marker existence and symbolic-link presence through `CheckMissing`. |
+| Argument or option                | Purpose                                                      |
+| --------------------------------- | ------------------------------------------------------------ |
+| `/etc/hostname`                   | Read the hostname supplied to each container.                |
+| `/workspace/isolation-marker.txt` | Select the marker written only in the first child scope.     |
+| `-e`, `-L`, `-f`, `-d`            | Probe marker existence and physical kind through `PathKind`. |
 
 ### Preconditions and fixtures
 
@@ -306,12 +306,12 @@ Check that two sequential native child test scopes observe distinct container ho
 
 1. Enter `t.Run("first", ...)` and create its environment.
 2. Run argv `["cat", "/etc/hostname"]`, check its Go error and result, and retain the exact stdout in the parent test's local variable.
-3. Call `CheckMissing("/workspace/isolation-marker.txt")`.
-4. Call `WriteFile("/workspace/isolation-marker.txt", []byte("first case\n"))`, then `CheckFile` with the same path and exact bytes.
+3. Compare `PathKind("/workspace/isolation-marker.txt")` with `cli.PathMissing`.
+4. Call `WriteFile("/workspace/isolation-marker.txt", []byte("first case\n"))`, then compare `ReadFile` with the same exact bytes.
 5. Return from the first child so its registered cleanup finishes before `t.Run` returns. If that child fails, return from the parent without starting the second child.
 6. Enter `t.Run("second", ...)`, create a new environment, and run argv `["cat", "/etc/hostname"]`.
 7. Check the Go error and command result, then compare the observed stdout with the first child's stdout.
-8. Call `CheckMissing("/workspace/isolation-marker.txt")` in the second environment, then return so its cleanup runs.
+8. Compare `PathKind("/workspace/isolation-marker.txt")` with `cli.PathMissing` in the second environment, then return so its cleanup runs.
 
 ### Expected results
 
@@ -319,7 +319,7 @@ Check that two sequential native child test scopes observe distinct container ho
 - Each hostname stdout is nonempty after `strings.TrimSpace`. No fixed hostname value or newline shape is asserted.
 - The two exact hostname stdout values differ.
 - The marker is absent before the first write, contains exactly `first case\n` after that write, and is absent in the second container, including no dangling symbolic link at that path.
-- Every file operation and path assertion succeeds without an error.
+- Every file operation and path observation succeeds without an error.
 
 ### Notes
 

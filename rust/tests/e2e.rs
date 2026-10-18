@@ -1,4 +1,6 @@
-use caseyard::{Command, CommandResult, Error, ExecutionFailure, ScopeError, with_environment};
+use caseyard::{
+    Command, CommandResult, Error, ExecutionFailure, PathKind, ScopeError, with_environment,
+};
 use std::time::{Duration, Instant};
 
 const IMAGE: &str = "e2e-example:local";
@@ -33,11 +35,11 @@ fn expected(exit_code: i64, stdout: &str, stderr: &str) -> CommandResult {
 #[tokio::test]
 #[ignore = "requires caller-built e2e-example:local, matching static driver and Docker"]
 async fn filesystem_snapshots() -> Result<(), ScopeError<Error>> {
-    use caseyard::{PathState, SnapshotChange};
+    use caseyard::PathState;
     with_environment(IMAGE, |env| async move {
         install_test_driver(&env).await?;
         env.write_file("/workspace/binary", &[0, 255, 10]).await?;
-        env.check_command(Command::new(["sh", "-c", "mkdir /workspace/directory; ln -s binary /workspace/link; ln -s 'missing target' /workspace/dangling"]), expected(0, "", "")).await?;
+        assert_eq!(env.run(Command::new(["sh", "-c", "mkdir /workspace/directory; ln -s binary /workspace/link; ln -s 'missing target' /workspace/dangling"])).await?, expected(0, "", ""));
         let paths = ["/workspace/missing", "/workspace/link", "/workspace/directory", "/workspace/dangling", "/workspace/binary"];
         let baseline = env.snapshot(paths).await?;
         assert_eq!(baseline.entries["/workspace/binary"], PathState::RegularFile { content: vec![0, 255, 10] });
@@ -45,21 +47,20 @@ async fn filesystem_snapshots() -> Result<(), ScopeError<Error>> {
         assert_eq!(baseline.entries["/workspace/missing"], PathState::Missing);
         assert_eq!(baseline.entries["/workspace/link"], PathState::Symlink { target: b"binary".to_vec() });
         assert_eq!(baseline.entries["/workspace/dangling"], PathState::Symlink { target: b"missing target".to_vec() });
-        env.check_command(Command::new(["sh", "-c", "touch /workspace/directory/unselected; chmod 0600 /workspace/binary"]), expected(0, "", "")).await?;
-        env.check_snapshot(&baseline).await?;
+        assert_eq!(env.run(Command::new(["sh", "-c", "touch /workspace/directory/unselected; chmod 0600 /workspace/binary"])).await?, expected(0, "", ""));
+        assert_eq!(env.snapshot(baseline.entries.keys().cloned()).await?, baseline);
         env.write_file("/workspace/binary", &[255, 0]).await?;
-        env.check_command(Command::new(["sh", "-c", "rm /workspace/directory/unselected; rmdir /workspace/directory; touch /workspace/directory /workspace/missing; ln -snf changed /workspace/dangling"]), expected(0, "", "")).await?;
+        assert_eq!(env.run(Command::new(["sh", "-c", "rm /workspace/directory/unselected; rmdir /workspace/directory; touch /workspace/directory /workspace/missing; ln -snf changed /workspace/dangling"])).await?, expected(0, "", ""));
         let after = env.snapshot(paths).await?;
-        let differences = baseline.differences(&after);
-        assert_eq!(differences.iter().map(|diff| (diff.path.as_str(), diff.changes[0])).collect::<Vec<_>>(), [
-            ("/workspace/binary", SnapshotChange::Content),
-            ("/workspace/dangling", SnapshotChange::Target),
-            ("/workspace/directory", SnapshotChange::Kind),
-            ("/workspace/missing", SnapshotChange::Existence),
-        ]);
-        assert!(matches!(env.check_snapshot(&baseline).await, Err(Error::Assertion(_))));
+        let mut expected_after = baseline.clone();
+        expected_after.entries.insert("/workspace/binary".into(), PathState::RegularFile { content: vec![255, 0] });
+        expected_after.entries.insert("/workspace/dangling".into(), PathState::Symlink { target: b"changed".to_vec() });
+        expected_after.entries.insert("/workspace/directory".into(), PathState::RegularFile { content: vec![] });
+        expected_after.entries.insert("/workspace/missing".into(), PathState::RegularFile { content: vec![] });
+        assert_eq!(after, expected_after);
+        assert_ne!(after, baseline);
         assert_eq!(baseline.entries["/workspace/binary"], PathState::RegularFile { content: vec![0, 255, 10] });
-        env.check_command(Command::new(["mkfifo", "/workspace/fifo"]), expected(0, "", "")).await?;
+        assert_eq!(env.run(Command::new(["mkfifo", "/workspace/fifo"])).await?, expected(0, "", ""));
         assert!(matches!(env.snapshot(["/workspace/fifo"]).await, Err(Error::Driver { .. })));
         // A non-directory parent is an inspection error, not a missing child.
         assert!(matches!(env.snapshot(["/workspace/binary/child"]).await, Err(Error::Driver { .. })));
@@ -71,25 +72,30 @@ async fn filesystem_snapshots() -> Result<(), ScopeError<Error>> {
 #[ignore = "requires caller-built image, matching static driver and Docker"]
 async fn filesystem_snapshot_literal_paths_deletion_and_json_bytes() -> Result<(), ScopeError<Error>>
 {
-    use caseyard::{PathState, SnapshotChange};
+    use caseyard::PathState;
     with_environment(IMAGE, |env| async move {
         install_test_driver(&env).await?;
         let before_bytes = b"{\n  \"a\": 1\n}\n";
         let after_bytes = b"{\"a\":1}";
         let before_json: serde_json::Value = serde_json::from_slice(before_bytes)
-            .map_err(|error| Error::Assertion(error.to_string()))?;
+            .map_err(|error| Error::InvalidInput(error.to_string()))?;
         let after_json: serde_json::Value = serde_json::from_slice(after_bytes)
-            .map_err(|error| Error::Assertion(error.to_string()))?;
+            .map_err(|error| Error::InvalidInput(error.to_string()))?;
         assert_eq!(before_json, after_json);
         env.write_file("/workspace/file with spaces", before_bytes)
             .await?;
         env.write_file("/workspace/delete me", b"removed").await?;
         env.write_file("/workspace/empty", b"").await?;
-        env.check_command(
-            Command::new(["ln", "-s", "file with spaces", "/workspace/link"]),
-            CommandResult::default(),
-        )
-        .await?;
+        assert_eq!(
+            env.run(Command::new([
+                "ln",
+                "-s",
+                "file with spaces",
+                "/workspace/link"
+            ]))
+            .await?,
+            CommandResult::default()
+        );
         let paths = [
             "/workspace/file with spaces",
             "/workspace/delete me",
@@ -103,24 +109,28 @@ async fn filesystem_snapshot_literal_paths_deletion_and_json_bytes() -> Result<(
         );
         env.write_file("/workspace/file with spaces", after_bytes)
             .await?;
-        env.check_command(
-            Command::new(["rm", "--", "/workspace/delete me"]),
-            CommandResult::default(),
-        )
-        .await?;
-        env.check_command(
-            Command::new(["ln", "-snf", "./file with spaces", "/workspace/link"]),
-            CommandResult::default(),
-        )
-        .await?;
-        env.check_command(
-            Command::new(["cat", "/workspace/link"]),
+        assert_eq!(
+            env.run(Command::new(["rm", "--", "/workspace/delete me"]))
+                .await?,
+            CommandResult::default()
+        );
+        assert_eq!(
+            env.run(Command::new([
+                "ln",
+                "-snf",
+                "./file with spaces",
+                "/workspace/link"
+            ]))
+            .await?,
+            CommandResult::default()
+        );
+        assert_eq!(
+            env.run(Command::new(["cat", "/workspace/link"])).await?,
             CommandResult {
                 stdout: after_bytes.to_vec(),
                 ..Default::default()
-            },
-        )
-        .await?;
+            }
+        );
         let after = env.snapshot(paths).await?;
         assert_eq!(after.entries["/workspace/delete me"], PathState::Missing);
         assert_eq!(
@@ -129,18 +139,23 @@ async fn filesystem_snapshot_literal_paths_deletion_and_json_bytes() -> Result<(
                 target: b"./file with spaces".to_vec()
             }
         );
-        assert_eq!(
-            baseline
-                .differences(&after)
-                .iter()
-                .map(|diff| (diff.path.as_str(), diff.changes[0]))
-                .collect::<Vec<_>>(),
-            [
-                ("/workspace/delete me", SnapshotChange::Existence),
-                ("/workspace/file with spaces", SnapshotChange::Content),
-                ("/workspace/link", SnapshotChange::Target),
-            ]
+        let mut expected_after = baseline.clone();
+        expected_after
+            .entries
+            .insert("/workspace/delete me".into(), PathState::Missing);
+        expected_after.entries.insert(
+            "/workspace/file with spaces".into(),
+            PathState::RegularFile {
+                content: after_bytes.to_vec(),
+            },
         );
+        expected_after.entries.insert(
+            "/workspace/link".into(),
+            PathState::Symlink {
+                target: b"./file with spaces".to_vec(),
+            },
+        );
+        assert_eq!(after, expected_after);
         assert_eq!(
             baseline.entries["/workspace/file with spaces"],
             PathState::RegularFile {
@@ -168,7 +183,7 @@ async fn terminal_raw_bytes_expect_resize_and_restoration() -> Result<(), Box<dy
                 session.expect(TerminalChannel::Terminal, b"ready", Duration::from_secs(5)).await?;
                 session.expect(TerminalChannel::Stdout, b"/workspace:literal value:", Duration::from_secs(5)).await?;
                 session.resize(24, 80).await?;
-                checks.check_file("/workspace/unchanged", b"baseline").await?;
+                assert_eq!(checks.read_file("/workspace/unchanged").await?, b"baseline");
                 session.send(&[3,4]).await?;
                 session.expect(TerminalChannel::Stdout, &[3], Duration::from_secs(5)).await?;
                 session.expect(TerminalChannel::Stdout, &[4], Duration::from_secs(5)).await?;
@@ -213,7 +228,7 @@ async fn terminal_key_bytes_context_sigint_and_cancel_snapshot()
         assert_eq!(observed.terminal, b"ready");
         assert_eq!(observed.status, TerminalStatus::Exited { code: 0 });
         assert!(observed.termios_restored);
-        env.check_snapshot(&baseline).await.map_err(ScopeError::Infrastructure)?;
+        assert_eq!(env.snapshot(baseline.entries.keys().cloned()).await.map_err(ScopeError::Infrastructure)?, baseline);
         let observed = env.with_terminal(Command {
             working_dir: Some("/workspace".into()),
             env: vec!["HOME=/workspace/synthetic-home".into(), "TERM=xterm-256color".into()],
@@ -225,7 +240,7 @@ async fn terminal_key_bytes_context_sigint_and_cancel_snapshot()
         }).await?;
         assert_eq!(observed.stdout, b"/workspace:/workspace/synthetic-home:xterm-256color");
         assert_eq!(observed.status, TerminalStatus::Signaled { signal: 2 });
-        env.check_snapshot(&baseline).await.map_err(ScopeError::Infrastructure)?;
+        assert_eq!(env.snapshot(baseline.entries.keys().cloned()).await.map_err(ScopeError::Infrastructure)?, baseline);
         Ok::<_, ScopeError<Error>>(())
     }).await?;
     Ok(())
@@ -283,7 +298,7 @@ async fn terminal_tiny_recovery_long_output_and_screen_restoration()
             let tiny = session.expect(TerminalChannel::Terminal, b"1 8\nignored", Duration::from_secs(5)).await?;
             assert_eq!(tiny.status, TerminalStatus::Running);
             assert_eq!(tiny.stdout, b"");
-            checks.check_snapshot(&expected_baseline).await?;
+            assert_eq!(checks.snapshot(expected_baseline.entries.keys().cloned()).await?, expected_baseline);
             session.resize(40, 120).await?;
             session.send(b"\x1b[B").await?;
             session.expect(TerminalChannel::Terminal, b"40 120\n", Duration::from_secs(5)).await?;
@@ -298,7 +313,7 @@ async fn terminal_tiny_recovery_long_output_and_screen_restoration()
         assert!(observed.termios_restored);
         assert_eq!(observed.initial_termios, observed.current_termios);
         assert_eq!(observed.status, TerminalStatus::Exited { code: 0 });
-        env.check_snapshot(&baseline).await.map_err(ScopeError::Infrastructure)?;
+        assert_eq!(env.snapshot(baseline.entries.keys().cloned()).await.map_err(ScopeError::Infrastructure)?, baseline);
         Ok::<_, ScopeError<Error>>(())
     }).await?;
     Ok(())
@@ -325,7 +340,7 @@ async fn terminal_cancel_and_interrupt_restore_termios_screen_and_cursor()
             assert!(observed.termios_restored);
             assert_eq!(observed.initial_termios, observed.current_termios);
             assert_eq!(observed.status, if mode == "cancel" { TerminalStatus::Exited { code: 0 } } else { TerminalStatus::Signaled { signal: 2 } });
-            env.check_snapshot(&baseline).await.map_err(ScopeError::Infrastructure)?;
+            assert_eq!(env.snapshot(baseline.entries.keys().cloned()).await.map_err(ScopeError::Infrastructure)?, baseline);
         }
         Ok::<_, ScopeError<Error>>(())
     }).await?;
@@ -415,13 +430,13 @@ async fn terminal_callback_failure_closes_process_and_socket() -> Result<(), Sco
                     session
                         .expect(TerminalChannel::Terminal, b"ready", Duration::from_secs(5))
                         .await?;
-                    Err::<(), _>(Error::Assertion("intentional callback failure".into()))
+                    Err::<(), _>(Error::InvalidInput("intentional callback failure".into()))
                 },
             )
             .await;
         assert!(matches!(
             outcome,
-            Err(ScopeError::Callback(Error::Assertion(_)))
+            Err(ScopeError::Callback(Error::InvalidInput(_)))
         ));
         let alive = env
             .run(Command::new([
@@ -431,11 +446,19 @@ async fn terminal_callback_failure_closes_process_and_socket() -> Result<(), Sco
             ]))
             .await?;
         assert_eq!(alive.exit_code, 1);
-        env.check_command(
-            Command::new(["find", "/tmp", "-maxdepth", "1", "-name", "caseyard-pty-*"]),
-            CommandResult::default(),
-        )
-        .await
+        assert_eq!(
+            env.run(Command::new([
+                "find",
+                "/tmp",
+                "-maxdepth",
+                "1",
+                "-name",
+                "caseyard-pty-*"
+            ]))
+            .await?,
+            CommandResult::default()
+        );
+        Ok(())
     })
     .await
 }
@@ -486,11 +509,19 @@ async fn terminal_future_drop_closes_process_and_escaped_handle() -> Result<(), 
         })
         .await
         .map_err(|_| Error::Deadline)??;
-        env.check_command(
-            Command::new(["find", "/tmp", "-maxdepth", "1", "-name", "caseyard-pty-*"]),
-            CommandResult::default(),
-        )
-        .await
+        assert_eq!(
+            env.run(Command::new([
+                "find",
+                "/tmp",
+                "-maxdepth",
+                "1",
+                "-name",
+                "caseyard-pty-*"
+            ]))
+            .await?,
+            CommandResult::default()
+        );
+        Ok(())
     })
     .await
 }
@@ -513,15 +544,22 @@ async fn terminal_panic_is_resumed_after_process_cleanup() -> Result<(), ScopeEr
                 session
                     .expect(TerminalChannel::Terminal, b"ready", Duration::from_secs(5))
                     .await?;
-                std::panic::panic_any(123_u32);
-                #[allow(unreachable_code)]
+                let observed = session.observe().await?;
+                assert_eq!(
+                    observed.status,
+                    caseyard::TerminalStatus::Exited { code: 7 }
+                );
                 Ok::<_, Error>(())
             },
         );
         let Err(payload) = std::panic::AssertUnwindSafe(scope).catch_unwind().await else {
             panic!("expected original terminal callback panic")
         };
-        assert_eq!(payload.downcast_ref::<u32>(), Some(&123));
+        let message = payload
+            .downcast_ref::<String>()
+            .ok_or_else(|| Error::Unsupported("expected native assertion panic".into()))?;
+        assert!(message.contains("left: Running"));
+        assert!(message.contains("right: Exited { code: 7 }"));
         let alive = env
             .run(Command::new([
                 "sh",
@@ -530,11 +568,19 @@ async fn terminal_panic_is_resumed_after_process_cleanup() -> Result<(), ScopeEr
             ]))
             .await?;
         assert_eq!(alive.exit_code, 1);
-        env.check_command(
-            Command::new(["find", "/tmp", "-maxdepth", "1", "-name", "caseyard-pty-*"]),
-            CommandResult::default(),
-        )
-        .await
+        assert_eq!(
+            env.run(Command::new([
+                "find",
+                "/tmp",
+                "-maxdepth",
+                "1",
+                "-name",
+                "caseyard-pty-*"
+            ]))
+            .await?,
+            CommandResult::default()
+        );
+        Ok(())
     })
     .await
 }
@@ -561,12 +607,12 @@ async fn nonroot_driver_installation_snapshot_and_terminal()
             baseline.entries["/tmp/caseyard-nonroot-missing"],
             PathState::Missing
         );
-        env.check_command(Command::new(["sh", "-c", "mkdir -p /tmp/caseyard-permissions/locked; printf secret > /tmp/caseyard-permissions/file"]), CommandResult::default()).await.map_err(ScopeError::Infrastructure)?;
+        assert_eq!(env.run(Command::new(["sh", "-c", "mkdir -p /tmp/caseyard-permissions/locked; printf secret > /tmp/caseyard-permissions/file"])).await.map_err(ScopeError::Infrastructure)?, CommandResult::default());
         let readable = env.snapshot(["/tmp/caseyard-permissions/file", "/tmp/caseyard-permissions/locked/child"]).await.map_err(ScopeError::Infrastructure)?;
-        env.check_command(Command::new(["chmod", "000", "/tmp/caseyard-permissions/file", "/tmp/caseyard-permissions/locked"]), CommandResult::default()).await.map_err(ScopeError::Infrastructure)?;
+        assert_eq!(env.run(Command::new(["chmod", "000", "/tmp/caseyard-permissions/file", "/tmp/caseyard-permissions/locked"])).await.map_err(ScopeError::Infrastructure)?, CommandResult::default());
         assert!(matches!(env.snapshot(["/tmp/caseyard-permissions/file"]).await, Err(Error::Driver { .. })));
         assert!(matches!(env.snapshot(["/tmp/caseyard-permissions/locked/child"]).await, Err(Error::Driver { .. })));
-        assert!(matches!(env.check_snapshot(&readable).await, Err(Error::Driver { .. })));
+        assert!(matches!(env.snapshot(readable.entries.keys().cloned()).await, Err(Error::Driver { .. })));
         let observed = env
             .with_terminal(
                 Command::new(["printf", "nonroot"]),
@@ -586,11 +632,10 @@ async fn nonroot_driver_installation_snapshot_and_terminal()
 #[ignore = "requires caller-built e2e-example:local and Docker"]
 async fn greeting() -> Result<(), ScopeError<Error>> {
     with_environment(IMAGE, |env| async move {
-        env.check_command(
-            Command::new(["echo", "hello from e2e"]),
-            expected(0, "hello from e2e\n", ""),
-        )
-        .await?;
+        assert_eq!(
+            env.run(Command::new(["echo", "hello from e2e"])).await?,
+            expected(0, "hello from e2e\n", "")
+        );
         let result = env.run(Command::new(["echo", "UTF-8"])).await?;
         assert_eq!(result, expected(0, "UTF-8\n", ""));
         Ok(())
@@ -602,30 +647,41 @@ async fn greeting() -> Result<(), ScopeError<Error>> {
 #[ignore = "requires caller-built e2e-example:local and Docker"]
 async fn file_workflow() -> Result<(), ScopeError<Error>> {
     with_environment(IMAGE, |env| async move {
-        env.check_command(
-            Command::new(["sh", "-c", "echo first > /workspace/result.txt"]),
-            expected(0, "", ""),
-        )
-        .await?;
-        env.check_command(
-            Command::new(["sh", "-c", "echo second >> /workspace/result.txt"]),
-            expected(0, "", ""),
-        )
-        .await?;
-        env.check_command(
-            Command::new(["cat", "/workspace/result.txt"]),
-            expected(0, "first\nsecond\n", ""),
-        )
-        .await?;
-        env.check_file("/workspace/result.txt", b"first\nsecond\n")
-            .await?;
+        assert_eq!(
+            env.run(Command::new([
+                "sh",
+                "-c",
+                "echo first > /workspace/result.txt"
+            ]))
+            .await?,
+            expected(0, "", "")
+        );
+        assert_eq!(
+            env.run(Command::new([
+                "sh",
+                "-c",
+                "echo second >> /workspace/result.txt"
+            ]))
+            .await?,
+            expected(0, "", "")
+        );
+        assert_eq!(
+            env.run(Command::new(["cat", "/workspace/result.txt"]))
+                .await?,
+            expected(0, "first\nsecond\n", "")
+        );
+        assert_eq!(
+            env.read_file("/workspace/result.txt").await?,
+            b"first\nsecond\n"
+        );
         env.write_file("/workspace/binary", &[0, 255, 10]).await?;
-        env.check_file("/workspace/binary", &[0, 255, 10]).await?;
-        env.check_command(
-            Command::new(["stat", "-c", "%a", "/workspace/binary"]),
-            expected(0, "644\n", ""),
-        )
-        .await
+        assert_eq!(env.read_file("/workspace/binary").await?, &[0, 255, 10]);
+        assert_eq!(
+            env.run(Command::new(["stat", "-c", "%a", "/workspace/binary"]))
+                .await?,
+            expected(0, "644\n", "")
+        );
+        Ok(())
     })
     .await
 }
@@ -634,11 +690,12 @@ async fn file_workflow() -> Result<(), ScopeError<Error>> {
 #[ignore = "requires caller-built e2e-example:local and Docker"]
 async fn expected_failure() -> Result<(), ScopeError<Error>> {
     with_environment(IMAGE, |env| async move {
-        env.check_command(
-            Command::new(["sh", "-c", "echo expected-failure; exit 7"]),
-            expected(7, "expected-failure\n", ""),
-        )
-        .await
+        assert_eq!(
+            env.run(Command::new(["sh", "-c", "echo expected-failure; exit 7"]))
+                .await?,
+            expected(7, "expected-failure\n", "")
+        );
+        Ok(())
     })
     .await
 }
@@ -656,11 +713,11 @@ async fn separate_streams() -> Result<(), ScopeError<Error>> {
                 "printf '%s:%s\\n' \"$HOME\" \"$PWD\"; printf 'diagnostic\\n' >&2; exit 7",
             ])
         };
-        env.check_command(
-            command,
-            expected(7, "/workspace/synthetic-home:/workspace\n", "diagnostic\n"),
-        )
-        .await
+        assert_eq!(
+            env.run(command).await?,
+            expected(7, "/workspace/synthetic-home:/workspace\n", "diagnostic\n")
+        );
+        Ok(())
     })
     .await
 }
@@ -677,32 +734,67 @@ async fn physical_paths() -> Result<(), ScopeError<Error>> {
             vec!["ln", "-s", "missing.txt", "/workspace/dangling"],
             vec!["ln", "-s", "directory", "/workspace/directory-link"],
         ] {
-            env.check_command(Command::new(args), expected(0, "", ""))
-                .await?;
+            assert_eq!(env.run(Command::new(args)).await?, expected(0, "", ""));
         }
-        env.check_regular_file("/workspace/result.txt").await?;
-        env.check_directory("/workspace/directory").await?;
-        env.check_missing("/workspace/missing.txt").await?;
-        env.check_symlink("/workspace/link", "result.txt").await?;
-        env.check_symlink("/workspace/dangling", "missing.txt")
-            .await?;
-        assert!(matches!(
-            env.check_missing("/workspace/dangling").await,
-            Err(Error::Assertion(_))
-        ));
-        assert!(matches!(
-            env.check_regular_file("/workspace/link").await,
-            Err(Error::Assertion(_))
-        ));
-        assert!(matches!(
-            env.check_directory("/workspace/directory-link").await,
-            Err(Error::Assertion(_))
-        ));
-        assert!(matches!(
-            env.check_symlink("/workspace/link", "/workspace/result.txt")
-                .await,
-            Err(Error::Assertion(_))
-        ));
+        assert_eq!(
+            env.path_kind("/workspace/result.txt").await?,
+            PathKind::RegularFile
+        );
+        assert_eq!(
+            env.path_kind("/workspace/directory").await?,
+            PathKind::Directory
+        );
+        assert_eq!(
+            env.path_kind("/workspace/missing.txt").await?,
+            PathKind::Missing
+        );
+        for path in [
+            "/workspace/link",
+            "/workspace/dangling",
+            "/workspace/directory-link",
+        ] {
+            assert_eq!(env.path_kind(path).await?, PathKind::Symlink);
+        }
+        assert_eq!(env.read_symlink("/workspace/link").await?, b"result.txt");
+        assert_eq!(
+            env.read_symlink("/workspace/dangling").await?,
+            b"missing.txt"
+        );
+        assert_eq!(
+            env.run(Command::new([
+                "ln",
+                "-s",
+                "literal\n\n",
+                "/workspace/newline-link"
+            ]))
+            .await?,
+            CommandResult::default()
+        );
+        assert_eq!(
+            env.read_symlink("/workspace/newline-link").await?,
+            b"literal\n\n"
+        );
+        assert_eq!(
+            env.run(Command::new(["mkfifo", "/workspace/fifo"])).await?,
+            CommandResult::default()
+        );
+        assert_eq!(env.path_kind("/workspace/fifo").await?, PathKind::Other);
+        assert_eq!(
+            env.run(Command::new([
+                "sh",
+                "-c",
+                "ln -s \"$(printf '\\377')\" /workspace/byte-link"
+            ]))
+            .await?,
+            CommandResult::default()
+        );
+        assert_eq!(env.read_symlink("/workspace/byte-link").await?, [255]);
+        for path in ["/workspace/result.txt", "/workspace/missing.txt"] {
+            assert!(matches!(
+                env.read_symlink(path).await,
+                Err(Error::Execution { .. })
+            ));
+        }
         Ok(())
     })
     .await
@@ -748,7 +840,10 @@ async fn scopes_are_fresh_remove_owned_containers_and_preserve_image()
     for _ in 0..2 {
         let inspect = docker.clone();
         let id = with_environment(IMAGE, move |env| async move {
-            env.check_missing("/workspace/scoped-fixture").await?;
+            assert_eq!(
+                env.path_kind("/workspace/scoped-fixture").await?,
+                PathKind::Missing
+            );
             env.write_file("/workspace/scoped-fixture", b"owned\n")
                 .await?;
             let info = inspect.inspect_container(env.container_id(), None).await?;
@@ -783,13 +878,12 @@ async fn scopes_are_fresh_remove_owned_containers_and_preserve_image()
 async fn working_directory_preserves_literal_argv() -> Result<(), ScopeError<Error>> {
     with_environment(IMAGE, |env| async move {
         let directory = "/workspace/a 'quoted' $(literal)";
-        env.check_command(
-            Command::new(["mkdir", "--", directory]),
-            expected(0, "", ""),
-        )
-        .await?;
-        env.check_command(
-            Command {
+        assert_eq!(
+            env.run(Command::new(["mkdir", "--", directory])).await?,
+            expected(0, "", "")
+        );
+        assert_eq!(
+            env.run(Command {
                 working_dir: Some(directory.into()),
                 ..Command::new([
                     "printf",
@@ -799,15 +893,19 @@ async fn working_directory_preserves_literal_argv() -> Result<(), ScopeError<Err
                     "$(touch /workspace/injected)",
                     "'literal'",
                 ])
-            },
+            })
+            .await?,
             expected(
                 0,
                 "<>\n<two words>\n<$(touch /workspace/injected)>\n<'literal'>\n",
                 "",
-            ),
-        )
-        .await?;
-        env.check_missing("/workspace/injected").await
+            )
+        );
+        assert_eq!(
+            env.path_kind("/workspace/injected").await?,
+            PathKind::Missing
+        );
+        Ok(())
     })
     .await
 }
@@ -846,14 +944,20 @@ async fn callback_panic_is_resumed_after_container_removal()
     let scope = with_environment(IMAGE, |env| async move {
         send.send(env.container_id().to_string())
             .map_err(|_| Error::Cancelled)?;
-        std::panic::panic_any(123_u32);
-        #[allow(unreachable_code)]
+        let actual = env.run(Command::new(["printf", "actual"])).await?;
+        assert_eq!(actual, expected(7, "expected", "diagnostic"));
         Ok::<(), Error>(())
     });
     let Err(payload) = std::panic::AssertUnwindSafe(scope).catch_unwind().await else {
         panic!("expected original panic")
     };
-    assert_eq!(payload.downcast_ref::<u32>(), Some(&123));
+    let message = payload
+        .downcast_ref::<String>()
+        .ok_or("expected native assertion panic")?;
+    assert!(message.contains("left: CommandResult { exit_code: 0"));
+    assert!(message.contains("right: CommandResult { exit_code: 7"));
+    assert!(message.contains("stdout:"));
+    assert!(message.contains("stderr:"));
     let docker = testcontainers::core::client::docker_client_instance().await?;
     assert!(matches!(
         docker.inspect_container(&receive.await?, None).await,

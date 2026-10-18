@@ -6,7 +6,6 @@ import { afterAll, beforeAll, expect, test } from 'vitest'
 
 import {
   DeadlineError,
-  compareSnapshots,
   installDriver,
   withTerminal,
   type TerminalSession,
@@ -78,46 +77,46 @@ test.concurrent('file workflow', async ({ expect, signal }) => {
     image,
     async (env) => {
       await checkIdentity(env)
-      await env.checkCommand({ args: ['sh', '-c', 'echo first > /workspace/result.txt'] }, empty)
-      await env.checkCommand({ args: ['sh', '-c', 'echo second >> /workspace/result.txt'] }, empty)
-      await env.checkCommand({ args: ['cat', '/workspace/result.txt'] }, { ...empty, stdout: 'first\nsecond\n' })
-      await env.checkFile('/workspace/result.txt', Buffer.from('first\nsecond\n'))
+      expect(await env.run({ args: ['sh', '-c', 'echo first > /workspace/result.txt'] })).toEqual(empty)
+      expect(await env.run({ args: ['sh', '-c', 'echo second >> /workspace/result.txt'] })).toEqual(empty)
+      expect(await env.run({ args: ['cat', '/workspace/result.txt'] })).toEqual({ ...empty, stdout: 'first\nsecond\n' })
+      expect(await env.readFile('/workspace/result.txt')).toEqual(Buffer.from('first\nsecond\n'))
       const bytes = Buffer.from([0, 255, 10, 13, 1])
       await env.writeFile('/workspace/binary', bytes)
       expect(await env.readFile('/workspace/binary')).toEqual(bytes)
-      await env.checkCommand({ args: ['stat', '-c', '%a', '/workspace/binary'] }, { ...empty, stdout: '644\n' })
+      expect(await env.run({ args: ['stat', '-c', '%a', '/workspace/binary'] })).toEqual({ ...empty, stdout: '644\n' })
     },
     signal,
   )
 })
 
-test.concurrent('expected failure', async ({ signal }) => {
+test.concurrent('expected failure', async ({ expect, signal }) => {
   await withEnvironment(
     image,
     async (env) => {
       await checkIdentity(env)
-      await env.checkCommand(
-        { args: ['sh', '-c', 'echo expected-failure; exit 7'] },
-        { exitCode: 7, stdout: 'expected-failure\n', stderr: '' },
-      )
+      expect(await env.run({ args: ['sh', '-c', 'echo expected-failure; exit 7'] })).toEqual({
+        exitCode: 7,
+        stdout: 'expected-failure\n',
+        stderr: '',
+      })
     },
     signal,
   )
 })
 
-test.concurrent('separate streams', async ({ signal }) => {
+test.concurrent('separate streams', async ({ expect, signal }) => {
   await withEnvironment(
     image,
     async (env) => {
       await checkIdentity(env)
-      await env.checkCommand(
-        {
+      expect(
+        await env.run({
           args: ['sh', '-c', 'printf "%s:%s\\n" "$HOME" "$PWD"; printf "diagnostic\\n" >&2; exit 7'],
           workingDir: '/workspace',
           env: ['HOME=/workspace/synthetic-home'],
-        },
-        { exitCode: 7, stdout: '/workspace/synthetic-home:/workspace\n', stderr: 'diagnostic\n' },
-      )
+        }),
+      ).toEqual({ exitCode: 7, stdout: '/workspace/synthetic-home:/workspace\n', stderr: 'diagnostic\n' })
     },
     signal,
   )
@@ -135,17 +134,18 @@ test.concurrent('physical paths', async ({ expect, signal }) => {
         ['ln', '-s', 'missing.txt', '/workspace/dangling'],
         ['ln', '-s', 'directory', '/workspace/directory-link'],
       ])
-        await env.checkCommand({ args }, empty)
-      await env.checkRegularFile('/workspace/result.txt')
-      await env.checkDirectory('/workspace/directory')
-      await env.checkMissing('/workspace/missing.txt')
-      await env.checkSymlink('/workspace/link', 'result.txt')
-      await env.checkSymlink('/workspace/dangling', 'missing.txt')
-      await expect(env.checkMissing('/workspace/dangling')).rejects.toThrow()
-      await expect(env.checkMissing('/workspace/result.txt')).rejects.toThrow()
-      await expect(env.checkRegularFile('/workspace/link')).rejects.toThrow()
-      await expect(env.checkDirectory('/workspace/directory-link')).rejects.toThrow()
-      await expect(env.checkSymlink('/workspace/link', '/workspace/result.txt')).rejects.toThrow()
+        expect(await env.run({ args })).toEqual(empty)
+      expect(await env.pathKind('/workspace/result.txt')).toBe('file')
+      expect(await env.pathKind('/workspace/directory')).toBe('directory')
+      expect(await env.pathKind('/workspace/missing.txt')).toBe('missing')
+      expect(await env.pathKind('/workspace/link')).toBe('symlink')
+      expect(await env.pathKind('/workspace/dangling')).toBe('symlink')
+      expect(await env.pathKind('/workspace/directory-link')).toBe('symlink')
+      expect(await env.readSymlink('/workspace/link')).toBe('result.txt')
+      expect(await env.readSymlink('/workspace/dangling')).toBe('missing.txt')
+      expect(await env.run({ args: ['mkfifo', '/workspace/fifo'] })).toEqual(empty)
+      expect(await env.pathKind('/workspace/fifo')).toBe('other')
+      await expect(env.readSymlink('/workspace/result.txt')).rejects.toThrow()
     },
     signal,
   )
@@ -170,26 +170,22 @@ test.concurrent('deadline', async ({ expect, signal }) => {
   ).rejects.toBeInstanceOf(DeadlineError)
 })
 
-test.concurrent('filesystem snapshots preserve physical kinds and diagnose sorted changes', async ({
-  expect,
-  signal,
-}) => {
+test.concurrent('filesystem snapshots preserve physical kinds and save sorted changes', async ({ expect, signal }) => {
   await withEnvironment(
     image,
     async (env) => {
       await checkIdentity(env)
       await installFixtureDriver(env)
       await env.writeFile('/workspace/binary', Buffer.from([0, 255, 10, 13]))
-      await env.checkCommand(
-        {
+      expect(
+        await env.run({
           args: [
             'sh',
             '-c',
             'mkdir /workspace/directory; ln -s binary /workspace/link; ln -s missing /workspace/dangling',
           ],
-        },
-        empty,
-      )
+        }),
+      ).toEqual(empty)
       const paths = [
         '/workspace/missing',
         '/workspace/link',
@@ -205,27 +201,21 @@ test.concurrent('filesystem snapshots preserve physical kinds and diagnose sorte
         { path: '/workspace/link', state: { kind: 'symlink', target: Buffer.from('binary') } },
         { path: '/workspace/missing', state: { kind: 'missing' } },
       ])
-      await env.checkSnapshot(before)
+      expect(before).toMatchSnapshot('initial physical state')
+      expect(await env.snapshot(paths)).toEqual(before)
       await env.writeFile('/workspace/directory/ignored', Buffer.from('no recursion'))
-      await env.checkSnapshot(before)
+      expect(await env.snapshot(paths)).toEqual(before)
       await env.writeFile('/workspace/binary', Buffer.from([0, 254, 10, 13]))
-      await env.checkCommand(
-        {
+      expect(
+        await env.run({
           args: [
             'sh',
             '-c',
             'rm /workspace/link; ln -s ./binary /workspace/link; rmdir /workspace/directory 2>/dev/null || rm -r /workspace/directory; touch /workspace/directory; mkdir /workspace/missing',
           ],
-        },
-        empty,
-      )
-      expect(compareSnapshots(before, await env.snapshot(paths))).toEqual([
-        { path: '/workspace/binary', reason: 'content' },
-        { path: '/workspace/directory', reason: 'kind' },
-        { path: '/workspace/link', reason: 'target' },
-        { path: '/workspace/missing', reason: 'existence' },
-      ])
-      await expect(env.checkSnapshot(before)).rejects.toThrow('Filesystem snapshot mismatch')
+        }),
+      ).toEqual(empty)
+      expect(await env.snapshot(paths)).toMatchSnapshot('changed physical state')
       expect(before.entries[0]).toEqual({
         path: '/workspace/binary',
         state: { kind: 'file', bytes: Buffer.from([0, 255, 10, 13]) },
@@ -249,9 +239,9 @@ test.concurrent('filesystem snapshots detect JSON whitespace bytes and deletion 
       const before = await env.snapshot([path])
       await env.writeFile(path, Buffer.from('{ "value": 1 }\n\n'))
       const changed = await env.snapshot([path])
-      expect(compareSnapshots(before, changed)).toEqual([{ path, reason: 'content' }])
-      await env.checkCommand({ args: ['rm', path] }, empty)
-      expect(compareSnapshots(changed, await env.snapshot([path]))).toEqual([{ path, reason: 'existence' }])
+      expect(changed.entries).toEqual([{ path, state: { kind: 'file', bytes: Buffer.from('{ "value": 1 }\n\n') } }])
+      expect(await env.run({ args: ['rm', path] })).toEqual(empty)
+      expect((await env.snapshot([path])).entries).toEqual([{ path, state: { kind: 'missing' } }])
       expect(before.entries).toEqual([{ path, state: { kind: 'file', bytes: Buffer.from('{"value":1}\n') } }])
     },
     signal,
@@ -267,7 +257,7 @@ test.concurrent('filesystem snapshots reject special files and non-directory pat
     async (env) => {
       await checkIdentity(env)
       await installFixtureDriver(env)
-      await env.checkCommand({ args: ['mkfifo', '/workspace/fifo'] }, empty)
+      expect(await env.run({ args: ['mkfifo', '/workspace/fifo'] })).toEqual(empty)
       await expect(env.snapshot(['/workspace/fifo'])).rejects.toThrow(/unsupported/i)
       await env.writeFile('/workspace/file', Buffer.from('file'))
       await expect(env.snapshot(['/workspace/file/child'])).rejects.toThrow(/not a directory/i)
@@ -282,7 +272,7 @@ test.concurrent('filesystem snapshots preserve arbitrary literal link target byt
     async (env) => {
       await checkIdentity(env)
       await installFixtureDriver(env)
-      await env.checkCommand({ args: ['sh', '-c', 'ln -s "$(printf "\\377")" /workspace/raw-link'] }, empty)
+      expect(await env.run({ args: ['sh', '-c', 'ln -s "$(printf "\\377")" /workspace/raw-link'] })).toEqual(empty)
       expect((await env.snapshot(['/workspace/raw-link'])).entries).toEqual([
         { path: '/workspace/raw-link', state: { kind: 'symlink', target: Buffer.from([255]) } },
       ])
@@ -373,7 +363,7 @@ test.concurrent('non-root images install executable drivers without changing ord
       expect((await env.run({ args: ['id', '-u'] })).stdout.trim()).not.toBe('0')
       await installFixtureDriver(env)
       await env.writeFile('/tmp/nonroot-file', Buffer.from([0, 255]))
-      await env.checkCommand({ args: ['stat', '-c', '%a', '/tmp/nonroot-file'] }, { ...empty, stdout: '644\n' })
+      expect(await env.run({ args: ['stat', '-c', '%a', '/tmp/nonroot-file'] })).toEqual({ ...empty, stdout: '644\n' })
       expect((await env.snapshot(['/tmp/nonroot-file'])).entries).toEqual([
         { path: '/tmp/nonroot-file', state: { kind: 'file', bytes: Buffer.from([0, 255]) } },
       ])
@@ -436,7 +426,7 @@ test.concurrent('terminal expectation timeout retains diagnostics and literal Ct
           name: 'TerminalError',
           observation: { stdout: Buffer.alloc(0), terminal: Buffer.from('ready'), status: { kind: 'running' } },
         })
-        await env.checkDirectory('/workspace')
+        expect(await env.pathKind('/workspace')).toBe('directory')
         await session.send(Buffer.from([4]))
         const result = await session.wait()
         expect(result.status).toEqual({ kind: 'exited', code: 0 })
@@ -493,7 +483,9 @@ test.concurrent('terminal signals and callback failure clean up a surviving proc
       ).rejects.toBe(cause)
       await expect(escaped.observe()).rejects.toThrow('closed')
       expect((await env.run({ args: ['sh', '-c', 'kill -0 "$(cat /workspace/terminal-pid)"'] })).exitCode).not.toBe(0)
-      await env.checkCommand({ args: ['sh', '-c', 'find /tmp -maxdepth 1 -name "caseyard-pty-*" -print'] }, empty)
+      expect(await env.run({ args: ['sh', '-c', 'find /tmp -maxdepth 1 -name "caseyard-pty-*" -print'] })).toEqual(
+        empty,
+      )
     },
     signal,
   )
@@ -587,7 +579,7 @@ test.concurrent('terminal unsupported TERM is observable without changing explic
           expect(done.termiosRestored).toBe(true)
         },
       )
-      await env.checkSnapshot(before)
+      expect(await env.snapshot(before.entries.map(({ path }) => path))).toEqual(before)
     },
     signal,
   )
@@ -603,7 +595,7 @@ test.concurrent('terminal tiny Enter is a no-op before long-list resize recovery
       await checkIdentity(env)
       await installFixtureDriver(env)
       await env.writeFile('/workspace/config', Buffer.from([0, 255]))
-      await env.checkCommand({ args: ['ln', '-s', 'config', '/workspace/config-link'] }, empty)
+      expect(await env.run({ args: ['ln', '-s', 'config', '/workspace/config-link'] })).toEqual(empty)
       const before = await env.snapshot(['/workspace/config', '/workspace/config-link', '/workspace/absent'])
       const list = Buffer.from(
         Array.from({ length: 4096 }, (_, index) => `row${String(index).padStart(4, '0')}\n`).join(''),
@@ -622,7 +614,7 @@ test.concurrent('terminal tiny Enter is a no-op before long-list resize recovery
           await terminal.expect('terminal', Buffer.from('tiny>'))
           await terminal.send(Buffer.from([13]))
           await terminal.expect('terminal', Buffer.from('ignored'))
-          await env.checkSnapshot(before)
+          expect(await env.snapshot(before.entries.map(({ path }) => path))).toEqual(before)
           expect((await terminal.observe()).status).toEqual({ kind: 'running' })
           await terminal.resize(24, 80)
           await terminal.expect('terminal', Buffer.from('24 80\n'))
@@ -645,7 +637,7 @@ test.concurrent('terminal tiny Enter is a no-op before long-list resize recovery
           expect(done.termiosRestored).toBe(true)
         },
       )
-      await env.checkSnapshot(before)
+      expect(await env.snapshot(before.entries.map(({ path }) => path))).toEqual(before)
     },
     signal,
   )

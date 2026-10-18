@@ -12,9 +12,9 @@ export interface SnapshotEntry {
   readonly state: FileState
 }
 
-export interface SnapshotDifference {
-  readonly path: string
-  readonly reason: 'existence' | 'kind' | 'content' | 'target'
+/** Plain captured state. File and link-target buffers are detached on every read. */
+export interface FilesystemSnapshot {
+  readonly entries: readonly SnapshotEntry[]
 }
 
 function copyState(state: FileState): FileState {
@@ -22,49 +22,12 @@ function copyState(state: FileState): FileState {
   return Object.freeze(state.kind === 'file' ? { kind: 'file', bytes: Buffer.from(state.bytes) } : { ...state })
 }
 
-/** Read-only captured state. Every returned file byte buffer is a detached copy. */
-export class FilesystemSnapshot {
-  readonly #entries: readonly SnapshotEntry[]
-
-  constructor(entries: readonly SnapshotEntry[]) {
-    const paths = new Set<string>()
-    this.#entries = Object.freeze(
-      entries
-        .map(({ path, state }) => {
-          if (!path || path.includes('\0')) throw new TypeError('Snapshot paths must be nonempty NUL-free strings')
-          if (paths.has(path)) throw new TypeError(`Duplicate snapshot path: ${path}`)
-          paths.add(path)
-          return Object.freeze({ path, state: copyState(state) })
-        })
-        .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
-    )
-    Object.freeze(this)
-  }
-
-  get entries(): readonly SnapshotEntry[] {
-    return Object.freeze(this.#entries.map(({ path, state }) => Object.freeze({ path, state: copyState(state) })))
-  }
-}
-
-/** Compare the union of explicit paths. No filesystem access or baseline updates occur. */
-export function compareSnapshots(
-  expected: FilesystemSnapshot,
-  actual: FilesystemSnapshot,
-): readonly SnapshotDifference[] {
-  const before = new Map(expected.entries.map(({ path, state }) => [path, state]))
-  const after = new Map(actual.entries.map(({ path, state }) => [path, state]))
-  const differences: SnapshotDifference[] = []
-  for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
-    const left = before.get(path)
-    const right = after.get(path)
-    let reason: SnapshotDifference['reason'] | undefined
-    if (!left || !right || (left.kind === 'missing') !== (right.kind === 'missing')) reason = 'existence'
-    else if (left.kind !== right.kind) reason = 'kind'
-    else if (left.kind === 'file' && right.kind === 'file' && !left.bytes.equals(right.bytes)) reason = 'content'
-    else if (left.kind === 'symlink' && right.kind === 'symlink' && !left.target.equals(right.target)) reason = 'target'
-    if (reason) differences.push(Object.freeze({ path, reason }))
-  }
-  return Object.freeze(differences)
+function snapshot(entries: readonly SnapshotEntry[]): FilesystemSnapshot {
+  return Object.freeze({
+    get entries(): readonly SnapshotEntry[] {
+      return Object.freeze(entries.map(({ path, state }) => Object.freeze({ path, state: copyState(state) })))
+    },
+  })
 }
 
 export async function captureSnapshot(environment: Environment, paths: readonly string[]): Promise<FilesystemSnapshot> {
@@ -72,7 +35,7 @@ export async function captureSnapshot(environment: Environment, paths: readonly 
   for (const path of ordered)
     if (typeof path !== 'string' || !path || path.includes('\0'))
       throw new TypeError('Snapshot paths must be nonempty NUL-free strings')
-  if (!ordered.length) return new FilesystemSnapshot([])
+  if (!ordered.length) return snapshot([])
   const states = await invokeDriver(environment, 'snapshot', { paths: ordered })
   if (!Array.isArray(states) || states.length !== ordered.length)
     throw new Error('Invalid snapshot classification response')
@@ -94,14 +57,11 @@ export async function captureSnapshot(environment: Environment, paths: readonly 
         break
       case 'symlink':
         if (data.length) throw new Error('Invalid symbolic link content')
-        entries.push({
-          path,
-          state: { kind: 'symlink', target },
-        })
+        entries.push({ path, state: { kind: 'symlink', target } })
         break
       default:
         throw new Error('Unsupported snapshot state')
     }
   }
-  return new FilesystemSnapshot(entries)
+  return snapshot(entries)
 }

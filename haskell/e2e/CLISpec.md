@@ -11,8 +11,8 @@ The image needs neither Python nor Go.
 The first capture asserts every entry, exact binary bytes `[0,255,13,10]`, an empty file, and JSON at a path that contains spaces.
 A second capture remains equal after a permission change and creation of an unselected directory child.
 The application workflow then changes bytes, replaces a directory with a link, changes a literal link target without changing its resolved destination, creates the absent directory, deletes a regular file, and changes JSON whitespace without changing its meaning.
-The comparison must return sorted content, kind, target, and existence differences.
-A failed `checkSnapshot` must leave the application bytes unchanged.
+Compare the captured maps with Hspec `shouldBe` to verify exact content, kind, target, and existence changes.
+Repeated capture must leave the application bytes unchanged.
 
 The `snapshot rejects unsupported physical kinds` example creates a FIFO with `mkfifo` and requires an infrastructure error.
 The `snapshot does not treat a non-directory parent as absence` example reads a child path below a regular file and requires an infrastructure error.
@@ -138,7 +138,7 @@ One `withEnvironment` invocation owns all commands and file operations for this 
 1. Execute `["sh", "-c", "echo first > /workspace/result.txt"]`, expecting `Result 0 "" ""`.
 2. Execute `["sh", "-c", "echo second >> /workspace/result.txt"]`, expecting `Result 0 "" ""`.
 3. Execute `["cat", "/workspace/result.txt"]`, expecting `Result 0 "first\nsecond\n" ""`.
-4. Compare the file bytes with `first\nsecond\n` using `checkFile`.
+4. Compare the file bytes with `first\nsecond\n` using `readFile` and Hspec `shouldReturn`.
 5. Write bytes `00 ff 0a` to `/workspace/bytes` through the archive API, then read and compare the exact bytes.
 6. Execute `["stat", "-c", "%a", "/workspace/bytes"]`, expecting `Result 0 "644\n" ""`, then clean up and audit.
 
@@ -197,7 +197,7 @@ The result requires exec inspection, rather than the status of a host Docker pro
 
 ### Scope
 
-Verify working-directory and environment overrides, separate streams, and consistent execution/assertion APIs in Hspec example `separate streams`.
+Verify working-directory and environment overrides and separate streams in Hspec example `separate streams`.
 
 ### Commands under test
 
@@ -222,9 +222,8 @@ A fresh environment is created inside Hspec execution.
 ### Execution flow
 
 1. Set `Command` argv to `["sh", "-c", script]` using the literal script above, working directory `/workspace`, and the single environment entry above.
-2. Call `checkCommand`, comparing `Result 7 "/workspace/synthetic-home:/workspace\n" "diagnostic\n"`.
-3. Execute the same command again with `run` and compare the same complete result using Hspec `shouldReturn`.
-4. Clean up and audit the invocation.
+2. Call `run` and use Hspec `shouldReturn` to compare `Result 7 "/workspace/synthetic-home:/workspace\n" "diagnostic\n"`.
+3. Clean up and audit the invocation.
 
 ### Expected results
 
@@ -244,12 +243,12 @@ Verify physical path types, literal link targets, and rejection of misleading li
 
 ### Commands under test
 
-| Command path | Purpose                                                                    |
-| ------------ | -------------------------------------------------------------------------- |
-| `mkdir`      | Create a physical directory.                                               |
-| `ln`         | Create file, dangling, and directory links.                                |
-| `test`       | Probe existence, link status, and physical types inside assertion helpers. |
-| `readlink`   | Compare unchanged link targets inside `checkSymlink`.                      |
+| Command path | Purpose                                                                |
+| ------------ | ---------------------------------------------------------------------- |
+| `mkdir`      | Create a physical directory.                                           |
+| `ln`         | Create file, dangling, and directory links.                            |
+| `test`       | Observe existence, link status, and physical types through `pathKind`. |
+| `readlink`   | Read unchanged literal link targets through `readSymlink`.             |
 
 ### Arguments and options
 
@@ -271,19 +270,19 @@ Write `/workspace/result.txt` with exact bytes `fixture\n` before creating links
 2. Execute `["ln", "-s", "result.txt", "/workspace/link"]`.
 3. Execute `["ln", "-s", "missing.txt", "/workspace/dangling"]`.
 4. Execute `["ln", "-s", "directory", "/workspace/dirlink"]`. Every setup command must return `Result 0 "" ""`.
-5. Assert a physical regular file and directory and missing `/workspace/missing.txt`.
-6. Assert literal targets `result.txt` and `missing.txt` for the file and dangling links.
-7. Require assertion failures for treating the dangling link as missing, the file link as a regular file, and the directory link as a directory.
-8. Require an assertion failure when comparing `/workspace/link` with the resolved target `/workspace/result.txt`, then clean up and audit.
+5. Compare `pathKind` results with `PathRegularFile`, `PathDirectory`, and `PathMissing` through Hspec `shouldReturn`.
+6. Require `PathSymlink` for the file, dangling, and directory links.
+7. Compare `readSymlink` results with the literal targets `result.txt`, `missing.txt`, and `directory`, then clean up and audit.
 
 ### Expected results
 
-Physical file and directory probes succeed, missing paths are accepted, and relative or dangling link targets remain unchanged.
-The four deliberately incorrect path assertions throw `AssertionFailed`.
+Physical regular files, directories, missing paths, and symbolic links have distinct observed kinds.
+Relative and dangling link targets remain unchanged.
 
 ### Notes
 
-The fixture text bytes are written but not independently read back in this scenario.
+The literal link targets are compared exactly.
+The basic path observations do not require a driver.
 All fixture filesystem state disappears with the case container. No host mounts are used.
 
 ## `deadline`

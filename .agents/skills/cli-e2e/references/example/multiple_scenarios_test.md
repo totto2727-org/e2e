@@ -28,7 +28,7 @@ Verify that the CLI image can print a caller-visible greeting successfully.
 ### Execution flow
 
 1. Run `echo "hello from e2e"`, passing the greeting as one argv entry after `echo`.
-2. Use `CheckCommand(command, want)` to compare exit status, stdout, and stderr with an exact `cli.Result`.
+2. Call `Run`, check its error, and compare the complete `cli.Result` with `==`; report a mismatch through `t.Fatalf`.
 
 ### Expected results
 
@@ -70,7 +70,7 @@ Verify that an expected nonzero CLI result remains observable without failing th
 ### Execution flow
 
 1. Run `false` without arguments.
-2. Use `CheckCommand(command, want)` to compare exit status, stdout, and stderr with an exact `cli.Result`.
+2. Call `Run`, check its error, and compare the complete `cli.Result` with `==`; report a mismatch through `t.Fatalf`.
 
 ### Expected results
 

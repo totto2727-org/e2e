@@ -4,8 +4,10 @@
 //! use caseyard::{Command, CommandResult, ScopeError, with_environment};
 //! # async fn example() -> Result<(), ScopeError<caseyard::Error>> {
 //! with_environment("e2e-example:local", |env| async move {
-//!     env.check_command(Command::new(["echo", "hello"]),
-//!         CommandResult { exit_code: 0, stdout: b"hello\n".to_vec(), stderr: vec![] }).await
+//!     let actual = env.run(Command::new(["echo", "hello"])).await?;
+//!     assert_eq!(actual,
+//!         CommandResult { exit_code: 0, stdout: b"hello\n".to_vec(), stderr: vec![] });
+//!     Ok(())
 //! }).await?;
 //! # Ok(()) }
 //! ```
@@ -16,7 +18,7 @@ pub use terminal::{
     TerminalOutput, TerminalSession, TerminalSettings, TerminalSignal, TerminalStatus,
 };
 mod snapshot;
-pub use snapshot::{FilesystemSnapshot, PathDifference, PathState, SnapshotChange};
+pub use snapshot::{FilesystemSnapshot, PathState};
 
 use futures_util::FutureExt;
 use std::{
@@ -117,6 +119,15 @@ pub struct CommandResult {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
 }
+/// Physical path kind. Symbolic links are classified before their targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathKind {
+    Missing,
+    RegularFile,
+    Directory,
+    Symlink,
+    Other,
+}
 /// Bytes already drained from Testcontainers before execution failed.
 /// Stdout is drained before stderr, so unread stderr is not guaranteed here.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -143,7 +154,6 @@ pub enum Error {
         failure: ExecutionFailure,
         output: PartialOutput,
     },
-    Assertion(String),
     Driver {
         message: String,
         observation: Option<Box<TerminalFailureObservation>>,
@@ -311,17 +321,6 @@ impl Environment {
             }),
         }
     }
-    /// Execute a command and compare its exit code and both streams exactly.
-    ///
-    /// # Errors
-    /// Returns execution errors from [`Self::run`] or [`Error::Assertion`] on mismatch.
-    pub async fn check_command(
-        &self,
-        command: Command,
-        expected: CommandResult,
-    ) -> Result<(), Error> {
-        compare_command(&self.run(command).await?, &expected)
-    }
     /// Copy exact bytes into a regular file with mode `0644`.
     ///
     /// # Errors
@@ -377,20 +376,6 @@ impl Environment {
         })
         .await
     }
-    /// Compare a file's bytes exactly.
-    ///
-    /// # Errors
-    /// Returns errors from [`Self::read_file`] or [`Error::Assertion`] on mismatch.
-    pub async fn check_file(&self, path: &str, expected: &[u8]) -> Result<(), Error> {
-        let actual = self.read_file(path).await?;
-        if actual == expected {
-            Ok(())
-        } else {
-            Err(Error::Assertion(format!(
-                "file {path:?}: {actual:?} != {expected:?}"
-            )))
-        }
-    }
     async fn probe(&self, flag: &str, path: &str) -> Result<bool, Error> {
         path_valid(path)?;
         let result = self.run(Command::new(["test", flag, path])).await?;
@@ -406,62 +391,44 @@ impl Environment {
             }),
         }
     }
-    /// Assert that no path exists, including a dangling symbolic link.
+    /// Observe the physical path kind without following symbolic links.
+    /// Requires `test` in the image, but no installed driver.
     ///
     /// # Errors
-    /// Returns input, execution, or assertion errors when the probes fail.
-    pub async fn check_missing(&self, path: &str) -> Result<(), Error> {
-        if self.probe("-e", path).await? || self.probe("-L", path).await? {
-            return Err(Error::Assertion(format!("{path:?} exists")));
+    /// Returns input or execution errors when a probe fails.
+    pub async fn path_kind(&self, path: &str) -> Result<PathKind, Error> {
+        for (flag, kind) in [
+            ("-L", PathKind::Symlink),
+            ("-f", PathKind::RegularFile),
+            ("-d", PathKind::Directory),
+            ("-e", PathKind::Other),
+        ] {
+            if self.probe(flag, path).await? {
+                return Ok(kind);
+            }
         }
-        Ok(())
+        Ok(PathKind::Missing)
     }
-    async fn physical(&self, flag: &str, path: &str) -> Result<(), Error> {
-        if !self.probe(flag, path).await? || self.probe("-L", path).await? {
-            return Err(Error::Assertion(format!("{path:?} is not physical {flag}")));
+    /// Read a symbolic link's literal target bytes without following it.
+    /// Requires `readlink` in the image, but no installed driver.
+    ///
+    /// # Errors
+    /// Returns input or execution errors for a missing or non-link path, or a failed read.
+    pub async fn read_symlink(&self, path: &str) -> Result<Vec<u8>, Error> {
+        path_valid(path)?;
+        let result = self.run(Command::new(["readlink", "--", path])).await?;
+        if result.exit_code != 0 || result.stdout.last() != Some(&b'\n') {
+            return Err(Error::Execution {
+                failure: ExecutionFailure::Protocol(format!("readlink failed: {result:?}")),
+                output: PartialOutput {
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                },
+            });
         }
-        Ok(())
-    }
-    /// Assert a physical regular file, not a symbolic link.
-    ///
-    /// # Errors
-    /// Returns input, execution, or assertion errors when the probes fail.
-    pub async fn check_regular_file(&self, path: &str) -> Result<(), Error> {
-        self.physical("-f", path).await
-    }
-    /// Assert a physical directory, not a symbolic link.
-    ///
-    /// # Errors
-    /// Returns input, execution, or assertion errors when the probes fail.
-    pub async fn check_directory(&self, path: &str) -> Result<(), Error> {
-        self.physical("-d", path).await
-    }
-    /// Assert a symbolic link with exactly the supplied literal target.
-    ///
-    /// # Errors
-    /// Returns input, execution, or assertion errors when the probes fail.
-    pub async fn check_symlink(&self, path: &str, target: &str) -> Result<(), Error> {
-        valid(target)?;
-        if !self.probe("-L", path).await? {
-            return Err(Error::Assertion(format!("{path:?} is not a symlink")));
-        }
-        self.check_command(
-            Command::new(["readlink", "--", path]),
-            CommandResult {
-                stdout: format!("{target}\n").into_bytes(),
-                ..Default::default()
-            },
-        )
-        .await
-    }
-}
-fn compare_command(actual: &CommandResult, expected: &CommandResult) -> Result<(), Error> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(Error::Assertion(format!(
-            "command {actual:?} != {expected:?}"
-        )))
+        let mut target = result.stdout;
+        target.pop();
+        Ok(target)
     }
 }
 fn file_archive(name: &std::ffi::OsStr, bytes: &[u8], mode: u32) -> Result<Vec<u8>, Error> {

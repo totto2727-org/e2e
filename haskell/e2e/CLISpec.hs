@@ -18,41 +18,40 @@ import Test.CLI.E2E.Internal (withEngine, newDeadline, bounded, jsonRequest, ide
 spec :: Spec
 spec = describe "caller-built Docker image" $ do
   it "greeting" $ auditedEnvironment $ \e ->
-    checkCommand e (command ["echo", "hello from e2e"]) (Result 0 "hello from e2e\n" "")
+    run e (command ["echo", "hello from e2e"]) `shouldReturn` Result 0 "hello from e2e\n" ""
 
   it "file workflow" $ auditedEnvironment $ \e -> do
-    checkCommand e (command ["sh", "-c", "echo first > /workspace/result.txt"]) (Result 0 "" "")
-    checkCommand e (command ["sh", "-c", "echo second >> /workspace/result.txt"]) (Result 0 "" "")
-    checkCommand e (command ["cat", "/workspace/result.txt"]) (Result 0 "first\nsecond\n" "")
-    checkFile e "/workspace/result.txt" "first\nsecond\n"
+    run e (command ["sh", "-c", "echo first > /workspace/result.txt"]) `shouldReturn` Result 0 "" ""
+    run e (command ["sh", "-c", "echo second >> /workspace/result.txt"]) `shouldReturn` Result 0 "" ""
+    run e (command ["cat", "/workspace/result.txt"]) `shouldReturn` Result 0 "first\nsecond\n" ""
+    readFile e "/workspace/result.txt" `shouldReturn` "first\nsecond\n"
     writeFile e "/workspace/bytes" (BS.pack [0,255,10])
     readFile e "/workspace/bytes" `shouldReturn` BS.pack [0,255,10]
-    checkCommand e (command ["stat", "-c", "%a", "/workspace/bytes"]) (Result 0 "644\n" "")
+    run e (command ["stat", "-c", "%a", "/workspace/bytes"]) `shouldReturn` Result 0 "644\n" ""
 
   it "expected failure" $ auditedEnvironment $ \e ->
-    checkCommand e (command ["sh", "-c", "echo expected-failure; exit 7"]) (Result 7 "expected-failure\n" "")
+    run e (command ["sh", "-c", "echo expected-failure; exit 7"]) `shouldReturn` Result 7 "expected-failure\n" ""
 
   it "separate streams" $ auditedEnvironment $ \e -> do
     let c = Command ["sh", "-c", "printf '%s:%s\\n' \"$HOME\" \"$PWD\"; printf 'diagnostic\\n' >&2; exit 7"]
           (Just "/workspace") ["HOME=/workspace/synthetic-home"]
         expected = Result 7 "/workspace/synthetic-home:/workspace\n" "diagnostic\n"
-    checkCommand e c expected
     run e c `shouldReturn` expected
 
   it "physical paths" $ auditedEnvironment $ \e -> do
     writeFile e "/workspace/result.txt" "fixture\n"
     forM_ [["mkdir", "/workspace/directory"], ["ln", "-s", "result.txt", "/workspace/link"],
            ["ln", "-s", "missing.txt", "/workspace/dangling"], ["ln", "-s", "directory", "/workspace/dirlink"]] $ \argv ->
-      checkCommand e (command argv) (Result 0 "" "")
-    checkRegularFile e "/workspace/result.txt"
-    checkDirectory e "/workspace/directory"
-    checkMissing e "/workspace/missing.txt"
-    checkSymlink e "/workspace/link" "result.txt"
-    checkSymlink e "/workspace/dangling" "missing.txt"
-    checkMissing e "/workspace/dangling" `shouldThrow` assertion
-    checkRegularFile e "/workspace/link" `shouldThrow` assertion
-    checkDirectory e "/workspace/dirlink" `shouldThrow` assertion
-    checkSymlink e "/workspace/link" "/workspace/result.txt" `shouldThrow` assertion
+      run e (command argv) `shouldReturn` Result 0 "" ""
+    pathKind e "/workspace/result.txt" `shouldReturn` PathRegularFile
+    pathKind e "/workspace/directory" `shouldReturn` PathDirectory
+    pathKind e "/workspace/missing.txt" `shouldReturn` PathMissing
+    pathKind e "/workspace/link" `shouldReturn` PathSymlink
+    pathKind e "/workspace/dangling" `shouldReturn` PathSymlink
+    pathKind e "/workspace/dirlink" `shouldReturn` PathSymlink
+    readSymlink e "/workspace/link" `shouldReturn` "result.txt"
+    readSymlink e "/workspace/dangling" `shouldReturn` "missing.txt"
+    readSymlink e "/workspace/dirlink" `shouldReturn` "directory"
 
   it "filesystem snapshots" $ auditedEnvironment $ \e -> do
     capability <- installedDriver e
@@ -60,8 +59,7 @@ spec = describe "caller-built Docker image" $ do
     writeFile e "/workspace/settings with spaces.json" "{\"selected\":true}\n"
     writeFile e "/workspace/empty" ""
     writeFile e "/workspace/deleted" "remove"
-    checkCommand e (command ["sh", "-c", "mkdir /workspace/directory; ln -s bytes /workspace/link; ln -s absent /workspace/dangling"])
-      (Result 0 "" "")
+    run e (command ["sh", "-c", "mkdir /workspace/directory; ln -s bytes /workspace/link; ln -s absent /workspace/dangling"]) `shouldReturn` Result 0 "" ""
     let paths = ["/workspace/missing", "/workspace/link", "/workspace/dangling", "/workspace/directory", "/workspace/bytes",
           "/workspace/settings with spaces.json", "/workspace/empty", "/workspace/deleted"]
     before <- captureSnapshot capability paths
@@ -70,26 +68,26 @@ spec = describe "caller-built Docker image" $ do
        ("/workspace/link", Symlink "bytes"), ("/workspace/dangling", Symlink "absent"), ("/workspace/missing", Missing),
        ("/workspace/settings with spaces.json", RegularFile "{\"selected\":true}\n"), ("/workspace/empty", RegularFile ""),
        ("/workspace/deleted", RegularFile "remove")]
-    checkSnapshot capability before
-    checkCommand e (command ["sh", "-c", "touch /workspace/directory/ignored; chmod 600 /workspace/bytes"])
-      (Result 0 "" "")
+    captureSnapshot capability paths `shouldReturn` before
+    run e (command ["sh", "-c", "touch /workspace/directory/ignored; chmod 600 /workspace/bytes"]) `shouldReturn` Result 0 "" ""
     captureSnapshot capability paths `shouldReturn` before
     writeFile e "/workspace/bytes" (BS.pack [0,254,13,10])
     writeFile e "/workspace/settings with spaces.json" "{ \"selected\": true }\n"
-    checkCommand e (command ["rm", "/workspace/deleted"]) (Result 0 "" "")
-    checkCommand e (command ["sh", "-c", "rmdir /workspace/missing 2>/dev/null; mkdir /workspace/missing; rm /workspace/link; ln -s ./bytes /workspace/link; rm -r /workspace/directory; ln -s missing /workspace/directory"])
-      (Result 0 "" "")
+    run e (command ["rm", "/workspace/deleted"]) `shouldReturn` Result 0 "" ""
+    run e (command ["sh", "-c", "rmdir /workspace/missing 2>/dev/null; mkdir /workspace/missing; rm /workspace/link; ln -s ./bytes /workspace/link; rm -r /workspace/directory; ln -s missing /workspace/directory"]) `shouldReturn` Result 0 "" ""
     after <- captureSnapshot capability paths
-    map (\difference -> (differencePath difference, differenceChange difference)) (diffSnapshots before after)
-      `shouldBe` [("/workspace/bytes", ContentChanged), ("/workspace/deleted", ExistenceChanged),
-                  ("/workspace/directory", KindChanged), ("/workspace/link", TargetChanged),
-                  ("/workspace/missing", ExistenceChanged), ("/workspace/settings with spaces.json", ContentChanged)]
-    checkSnapshot capability before `shouldThrow` assertion
+    snapshotEntries after `shouldBe` Map.fromList
+      [("/workspace/bytes", RegularFile (BS.pack [0,254,13,10])), ("/workspace/directory", Symlink "missing"),
+       ("/workspace/link", Symlink "./bytes"), ("/workspace/dangling", Symlink "absent"), ("/workspace/missing", Directory),
+       ("/workspace/settings with spaces.json", RegularFile "{ \"selected\": true }\n"), ("/workspace/empty", RegularFile ""),
+       ("/workspace/deleted", Missing)]
+    captureSnapshot capability paths `shouldReturn` after
     readFile e "/workspace/bytes" `shouldReturn` BS.pack [0,254,13,10]
 
   it "snapshot rejects unsupported physical kinds" $ auditedEnvironment $ \e -> do
     capability <- installedDriver e
-    checkCommand e (command ["mkfifo", "/workspace/fifo"]) (Result 0 "" "")
+    run e (command ["mkfifo", "/workspace/fifo"]) `shouldReturn` Result 0 "" ""
+    pathKind e "/workspace/fifo" `shouldReturn` PathOther
     captureSnapshot capability ["/workspace/fifo"] `shouldThrow` infrastructureError
 
   it "snapshot does not treat a non-directory parent as absence" $ auditedEnvironment $ \e -> do
@@ -113,7 +111,7 @@ spec = describe "caller-built Docker image" $ do
       terminalStatus finished `shouldBe` TerminalExited 0
       terminalTermiosRestored finished `shouldBe` True
       terminalCurrentTermios finished `shouldBe` terminalInitialTermios finished
-      checkFile e "/workspace/input" input
+      readFile e "/workspace/input" `shouldReturn` input
 
   forM_ ["xterm-256color", "caseyard-unsupported"] $ \term ->
     it ("terminal preserves argv cwd HOME and TERM=" ++ term) $ auditedEnvironment $ \e -> do
@@ -180,7 +178,7 @@ spec = describe "caller-built Docker image" $ do
         tiny <- observeTerminal terminal
         terminalStatus tiny `shouldBe` TerminalRunning
         terminalStdout tiny `shouldBe` BS.empty
-        checkSnapshot capability baseline
+        captureSnapshot capability (Map.keys (snapshotEntries baseline)) `shouldReturn` baseline
         _ <- resizeTerminal terminal 24 80
         _ <- sendTerminal terminal "size\n"
         _ <- expectTerminal terminal TerminalOutput "24 80\r\n" 5
@@ -190,7 +188,7 @@ spec = describe "caller-built Docker image" $ do
         terminalStdout finished `shouldBe` (BS.replicate 131072 120 <> "<end>")
         terminalStatus finished `shouldBe` TerminalExited 0
         terminalTermiosRestored finished `shouldBe` True
-    checkSnapshot capability baseline
+    captureSnapshot capability (Map.keys (snapshotEntries baseline)) `shouldReturn` baseline
 
   it "terminal callback cancellation preserves filesystem snapshot" $ auditedEnvironment $ \e -> do
     capability <- installedDriver e
@@ -200,9 +198,8 @@ spec = describe "caller-built Docker image" $ do
       defaultTerminalOptions (\terminal -> do
         _ <- expectTerminal terminal TerminalOutput "ready" 5
         throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
-    checkSnapshot capability baseline
-    checkCommand e (command ["sh", "-c", "! kill -0 $(cat /workspace/cancelled.pid) 2>/dev/null"])
-      (Result 0 "" "")
+    captureSnapshot capability (Map.keys (snapshotEntries baseline)) `shouldReturn` baseline
+    run e (command ["sh", "-c", "! kill -0 $(cat /workspace/cancelled.pid) 2>/dev/null"]) `shouldReturn` Result 0 "" ""
 
   it "terminal pipe input remains unread on no-op failure" $ auditedEnvironment $ \e -> do
     capability <- installedDriver e
@@ -245,12 +242,11 @@ spec = describe "caller-built Docker image" $ do
       defaultTerminalOptions $ \terminal -> do
         _ <- expectTerminal terminal TerminalOutput "ready" 5
         pure ()
-    checkCommand e (command ["sh", "-c", "! kill -0 $(cat /workspace/terminal.pid) 2>/dev/null"])
-      (Result 0 "" "")
+    run e (command ["sh", "-c", "! kill -0 $(cat /workspace/terminal.pid) 2>/dev/null"]) `shouldReturn` Result 0 "" ""
 
   it "nonroot image installs one driver for snapshots and terminals" $ auditedImage "e2e-example-nonroot:local" $ \e -> do
     capability <- installedDriver e
-    checkCommand e (command ["sh", "-c", "printf owned > /tmp/state"]) (Result 0 "" "")
+    run e (command ["sh", "-c", "printf owned > /tmp/state"]) `shouldReturn` Result 0 "" ""
     captured <- captureSnapshot capability ["/tmp/state", "/tmp/absent"]
     snapshotEntries captured `shouldBe` Map.fromList [("/tmp/state", RegularFile "owned"), ("/tmp/absent", Missing)]
     withTerminal capability (command ["sh", "-c", "printf ready >&2; printf success"]) defaultTerminalOptions $ \terminal -> do
@@ -263,14 +259,12 @@ spec = describe "caller-built Docker image" $ do
 
   it "nonroot snapshot inspection permission failure is not absence" $ auditedImage "e2e-example-nonroot:local" $ \e -> do
     capability <- installedDriver e
-    checkCommand e (command ["sh", "-c", "mkdir /tmp/private; touch /tmp/private/file; chmod 000 /tmp/private"])
-      (Result 0 "" "")
+    run e (command ["sh", "-c", "mkdir /tmp/private; touch /tmp/private/file; chmod 000 /tmp/private"]) `shouldReturn` Result 0 "" ""
     captureSnapshot capability ["/tmp/private/file"] `shouldThrow` infrastructureError
 
   it "nonroot snapshot file read permission failure is not absence" $ auditedImage "e2e-example-nonroot:local" $ \e -> do
     capability <- installedDriver e
-    checkCommand e (command ["sh", "-c", "printf secret > /tmp/unreadable; chmod 000 /tmp/unreadable"])
-      (Result 0 "" "")
+    run e (command ["sh", "-c", "printf secret > /tmp/unreadable; chmod 000 /tmp/unreadable"]) `shouldReturn` Result 0 "" ""
     captureSnapshot capability ["/tmp/unreadable"] `shouldThrow` infrastructureError
 
   it "deadline" $ auditedEnvironment $ \e -> do
@@ -325,9 +319,6 @@ installedDriver environment = do
 terminalFailureError :: TerminalError -> Bool
 terminalFailureError _ = True
 
-assertion :: E2EError -> Bool
-assertion (AssertionFailed _) = True
-assertion _ = False
 infrastructureError :: E2EError -> Bool
 infrastructureError (Infrastructure _) = True
 infrastructureError _ = False

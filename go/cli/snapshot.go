@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,29 +16,11 @@ const (
 	PathFile      PathKind = "file"
 	PathDirectory PathKind = "directory"
 	PathSymlink   PathKind = "symlink"
+	PathOther     PathKind = "other"
 )
-
-// SnapshotChange identifies the part of a path that changed.
-type SnapshotChange string
-
-const (
-	SnapshotExistence SnapshotChange = "existence"
-	SnapshotKind      SnapshotChange = "kind"
-	SnapshotContent   SnapshotChange = "content"
-	SnapshotTarget    SnapshotChange = "target"
-)
-
-// SnapshotDifference describes a change from a captured state to current state.
-// Differences are ordered lexicographically by Path.
-type SnapshotDifference struct {
-	Path       string
-	Change     SnapshotChange
-	BeforeKind PathKind
-	AfterKind  PathKind
-}
 
 // FilesystemSnapshot is an immutable, in-memory capture of explicit paths.
-// Its zero value is invalid. No directory traversal or metadata is captured.
+// Its zero value contains no paths. No directory traversal or metadata is captured.
 type FilesystemSnapshot struct {
 	entries map[string]snapshotEntry
 }
@@ -122,50 +103,22 @@ func (e *Environment) Snapshot(paths []string) (FilesystemSnapshot, error) {
 	return FilesystemSnapshot{entries: entries}, nil
 }
 
-// CompareSnapshot captures the same paths again and returns sorted differences.
-// Read failures and unsupported physical kinds are errors, never differences.
-func (e *Environment) CompareSnapshot(before FilesystemSnapshot) ([]SnapshotDifference, error) {
-	if len(before.entries) == 0 {
-		return nil, errors.New("cannot compare an uninitialized filesystem snapshot")
-	}
-	paths := make([]string, 0, len(before.entries))
-	for path := range before.entries {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	after, err := e.Snapshot(paths)
-	if err != nil {
-		return nil, err
-	}
-	differences := make([]SnapshotDifference, 0)
-	for _, path := range paths {
-		old, current := before.entries[path], after.entries[path]
-		var change SnapshotChange
-		switch {
-		case old.kind != current.kind && (old.kind == PathMissing || current.kind == PathMissing):
-			change = SnapshotExistence
-		case old.kind != current.kind:
-			change = SnapshotKind
-		case old.kind == PathFile && !bytes.Equal(old.content, current.content):
-			change = SnapshotContent
-		case old.kind == PathSymlink && !bytes.Equal(old.target, current.target):
-			change = SnapshotTarget
-		default:
-			continue
-		}
-		differences = append(differences, SnapshotDifference{Path: path, Change: change, BeforeKind: old.kind, AfterKind: current.kind})
-	}
-	return differences, nil
+// SnapshotEntry contains one selected path's exact state.
+// Content and Target preserve raw bytes without UTF-8 conversion.
+type SnapshotEntry struct {
+	Path    string
+	Kind    PathKind
+	Content string
+	Target  string
 }
 
-// CheckSnapshot requires every selected path to remain unchanged.
-func (e *Environment) CheckSnapshot(before FilesystemSnapshot) error {
-	differences, err := e.CompareSnapshot(before)
-	if err != nil {
-		return err
+// Entries returns a fresh slice ordered lexicographically by path.
+// The immutable strings and copied slice cannot mutate captured state.
+func (s FilesystemSnapshot) Entries() []SnapshotEntry {
+	entries := make([]SnapshotEntry, 0, len(s.entries))
+	for path, entry := range s.entries {
+		entries = append(entries, SnapshotEntry{Path: path, Kind: entry.kind, Content: string(entry.content), Target: string(entry.target)})
 	}
-	if len(differences) != 0 {
-		return fmt.Errorf("filesystem snapshot changed: %+v", differences)
-	}
-	return nil
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	return entries
 }

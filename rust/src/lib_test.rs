@@ -78,14 +78,29 @@ fn invalid_paths_are_rejected() {
         assert!(matches!(path_valid(path), Err(Error::InvalidInput(_))));
     }
 }
+#[tokio::test]
+async fn invalid_path_observations_fail_before_execution() -> TestResult {
+    let env = disconnected_environment()?;
+    for path in ["", "invalid\0path"] {
+        assert!(matches!(
+            env.path_kind(path).await,
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            env.read_symlink(path).await,
+            Err(Error::InvalidInput(_))
+        ));
+    }
+    Ok(())
+}
 #[test]
-fn every_command_field_is_compared_exactly() -> TestResult {
+fn every_command_field_participates_in_native_equality() {
     let expected = CommandResult {
         exit_code: 7,
         stdout: vec![0, 255],
         stderr: vec![],
     };
-    compare_command(&expected, &expected)?;
+    assert_eq!(expected, expected.clone());
     for actual in [
         CommandResult {
             exit_code: 0,
@@ -100,12 +115,8 @@ fn every_command_field_is_compared_exactly() -> TestResult {
             ..expected.clone()
         },
     ] {
-        assert!(matches!(
-            compare_command(&actual, &expected),
-            Err(Error::Assertion(_))
-        ));
+        assert_ne!(actual, expected);
     }
-    Ok(())
 }
 #[test]
 fn upload_archive_preserves_exact_bytes_and_mode() -> TestResult {

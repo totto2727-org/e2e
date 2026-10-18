@@ -3,7 +3,7 @@
 package e2e
 
 import (
-	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/totto2727-org/e2e/go/cli"
@@ -26,19 +26,26 @@ func TestFilesystemSnapshotScenario(t *testing.T) {
 		{"ln", "-s", "../missing target\n", "/workspace/e dangling"},
 		{"ln", "-s", "c bytes", "/workspace/h link"},
 	} {
-		if err := environment.CheckCommand(cli.Command{Args: args}, cli.Result{}); err != nil {
+		if result, err := environment.Run(cli.Command{Args: args}); err != nil {
 			t.Fatal(err)
+		} else if want := (cli.Result{}); result != want {
+			t.Fatalf("result=%#v want=%#v", result, want)
 		}
 	}
-	before, err := environment.Snapshot([]string{
+	paths := []string{
 		"/workspace/i json", "/workspace/h link", "/workspace/g missing", "/workspace/f directory", "/workspace/e dangling",
 		"/workspace/d type", "/workspace/c bytes", "/workspace/b deleted", "/workspace/a created ; literal",
-	})
+	}
+	before, err := environment.Snapshot(paths)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := environment.CheckSnapshot(before); err != nil {
+	after, err := environment.Snapshot(paths)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got, want := after.Entries(), before.Entries(); !slices.Equal(got, want) {
+		t.Errorf("snapshot=%#v want=%#v", got, want)
 	}
 	for _, args := range [][]string{
 		{"rm", "/workspace/b deleted", "/workspace/d type", "/workspace/e dangling", "/workspace/h link"},
@@ -47,8 +54,10 @@ func TestFilesystemSnapshotScenario(t *testing.T) {
 		{"ln", "-s", "./c bytes", "/workspace/h link"},
 		{"chmod", "700", "/workspace/f directory"},
 	} {
-		if err := environment.CheckCommand(cli.Command{Args: args}, cli.Result{}); err != nil {
+		if result, err := environment.Run(cli.Command{Args: args}); err != nil {
 			t.Fatal(err)
+		} else if want := (cli.Result{}); result != want {
+			t.Fatalf("result=%#v want=%#v", result, want)
 		}
 	}
 	for _, file := range []struct {
@@ -64,26 +73,25 @@ func TestFilesystemSnapshotScenario(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want := []cli.SnapshotDifference{
-		{Path: "/workspace/a created ; literal", Change: cli.SnapshotExistence, BeforeKind: cli.PathMissing, AfterKind: cli.PathFile},
-		{Path: "/workspace/b deleted", Change: cli.SnapshotExistence, BeforeKind: cli.PathFile, AfterKind: cli.PathMissing},
-		{Path: "/workspace/c bytes", Change: cli.SnapshotContent, BeforeKind: cli.PathFile, AfterKind: cli.PathFile},
-		{Path: "/workspace/d type", Change: cli.SnapshotKind, BeforeKind: cli.PathFile, AfterKind: cli.PathDirectory},
-		{Path: "/workspace/e dangling", Change: cli.SnapshotTarget, BeforeKind: cli.PathSymlink, AfterKind: cli.PathSymlink},
-		{Path: "/workspace/h link", Change: cli.SnapshotTarget, BeforeKind: cli.PathSymlink, AfterKind: cli.PathSymlink},
-		{Path: "/workspace/i json", Change: cli.SnapshotContent, BeforeKind: cli.PathFile, AfterKind: cli.PathFile},
+	want := []cli.SnapshotEntry{
+		{Path: "/workspace/a created ; literal", Kind: cli.PathFile},
+		{Path: "/workspace/b deleted", Kind: cli.PathMissing},
+		{Path: "/workspace/c bytes", Kind: cli.PathFile, Content: "\x00\xfe\n"},
+		{Path: "/workspace/d type", Kind: cli.PathDirectory},
+		{Path: "/workspace/e dangling", Kind: cli.PathSymlink, Target: "../other target\n"},
+		{Path: "/workspace/f directory", Kind: cli.PathDirectory},
+		{Path: "/workspace/g missing", Kind: cli.PathMissing},
+		{Path: "/workspace/h link", Kind: cli.PathSymlink, Target: "./c bytes"},
+		{Path: "/workspace/i json", Kind: cli.PathFile, Content: "{\n  \"same\": true\n}\n"},
 	}
 	for range 2 {
-		got, err := environment.CompareSnapshot(before)
+		after, err := environment.Snapshot(paths)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("differences=%+v want=%+v", got, want)
+		if got := after.Entries(); !slices.Equal(got, want) {
+			t.Fatalf("snapshot=%#v want=%#v", got, want)
 		}
-	}
-	if err := environment.CheckSnapshot(before); err == nil {
-		t.Fatal("expected snapshot mismatch without baseline update")
 	}
 }
 
@@ -91,18 +99,17 @@ func TestFilesystemSnapshotRejectsUnsupportedKindScenario(t *testing.T) {
 	t.Parallel()
 	environment := cli.NewEnvironment(t, "e2e-example:local")
 	installDriver(t, environment)
-	before, err := environment.Snapshot([]string{"/workspace/pipe"})
-	if err != nil {
+	paths := []string{"/workspace/pipe"}
+	if _, err := environment.Snapshot(paths); err != nil {
 		t.Fatal(err)
 	}
-	if err := environment.CheckCommand(cli.Command{Args: []string{"mkfifo", "/workspace/pipe"}}, cli.Result{}); err != nil {
+	if result, err := environment.Run(cli.Command{Args: []string{"mkfifo", "/workspace/pipe"}}); err != nil {
 		t.Fatal(err)
+	} else if want := (cli.Result{}); result != want {
+		t.Fatalf("result=%#v want=%#v", result, want)
 	}
 	if _, err := environment.Snapshot([]string{"/workspace/pipe"}); err == nil {
 		t.Fatal("unsupported FIFO accepted in snapshot")
-	}
-	if _, err := environment.CompareSnapshot(before); err == nil {
-		t.Fatal("unsupported FIFO treated as a comparison result")
 	}
 }
 
@@ -110,19 +117,18 @@ func TestFilesystemSnapshotPermissionErrorsScenario(t *testing.T) {
 	t.Parallel()
 	environment := cli.NewEnvironment(t, "e2e-example-nonroot:local")
 	installDriver(t, environment)
-	before, err := environment.Snapshot([]string{"/tmp/blocked/absent"})
-	if err != nil {
+	paths := []string{"/tmp/blocked/absent"}
+	if _, err := environment.Snapshot(paths); err != nil {
 		t.Fatal(err)
 	}
-	if err := environment.CheckCommand(cli.Command{Args: []string{"sh", "-c", "mkdir /tmp/blocked; touch /tmp/unreadable; chmod 000 /tmp/blocked /tmp/unreadable"}}, cli.Result{}); err != nil {
+	if result, err := environment.Run(cli.Command{Args: []string{"sh", "-c", "mkdir /tmp/blocked; touch /tmp/unreadable; chmod 000 /tmp/blocked /tmp/unreadable"}}); err != nil {
 		t.Fatal(err)
+	} else if want := (cli.Result{}); result != want {
+		t.Fatalf("result=%#v want=%#v", result, want)
 	}
 	for _, path := range []string{"/tmp/blocked/absent", "/tmp/unreadable"} {
 		if _, err := environment.Snapshot([]string{path}); err == nil {
 			t.Fatalf("inaccessible path %q was treated as absent or readable", path)
 		}
-	}
-	if _, err := environment.CompareSnapshot(before); err == nil {
-		t.Fatal("inaccessible ancestor was treated as unchanged missing path")
 	}
 }

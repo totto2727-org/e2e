@@ -9,7 +9,7 @@ module Test.CLI.E2E.Terminal
   , resizeTerminal, signalTerminal, waitTerminal
   ) where
 
-import Control.Exception hiding (AssertionFailed)
+import Control.Exception
 import Control.Monad (unless, void, when)
 import Data.Aeson hiding (Result)
 import qualified Data.Aeson.KeyMap as KM

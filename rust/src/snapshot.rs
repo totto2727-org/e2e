@@ -18,61 +18,6 @@ pub struct FilesystemSnapshot {
     pub entries: BTreeMap<String, PathState>,
 }
 
-/// An observable difference between two snapshots, in deterministic path order.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PathDifference {
-    pub path: String,
-    pub changes: Vec<SnapshotChange>,
-    pub before: Option<PathState>,
-    pub after: Option<PathState>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SnapshotChange {
-    Existence,
-    Kind,
-    Content,
-    Target,
-}
-
-impl FilesystemSnapshot {
-    /// Compare the union of explicitly selected paths without performing I/O.
-    #[must_use]
-    pub fn differences(&self, after: &Self) -> Vec<PathDifference> {
-        self.entries
-            .keys()
-            .chain(after.entries.keys())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .filter_map(|path| {
-                let before = self.entries.get(path);
-                let next = after.entries.get(path);
-                if before == next {
-                    return None;
-                }
-                let change = match (before, next) {
-                    (Some(PathState::RegularFile { .. }), Some(PathState::RegularFile { .. })) => {
-                        SnapshotChange::Content
-                    }
-                    (Some(PathState::Symlink { .. }), Some(PathState::Symlink { .. })) => {
-                        SnapshotChange::Target
-                    }
-                    (None | Some(PathState::Missing), _) | (_, None | Some(PathState::Missing)) => {
-                        SnapshotChange::Existence
-                    }
-                    _ => SnapshotChange::Kind,
-                };
-                Some(PathDifference {
-                    path: path.clone(),
-                    changes: vec![change],
-                    before: before.cloned(),
-                    after: next.cloned(),
-                })
-            })
-            .collect()
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireEntry {
@@ -145,22 +90,6 @@ impl Environment {
             driver::invoke(self, "snapshot", &serde_json::json!({"paths":paths}), None).await?;
         decode_snapshot(&paths, entries)
     }
-
-    /// Capture the baseline's paths and assert that every physical state is unchanged.
-    ///
-    /// # Errors
-    /// Returns capture errors or an assertion containing deterministic per-path differences.
-    pub async fn check_snapshot(&self, baseline: &FilesystemSnapshot) -> Result<(), Error> {
-        let after = self.snapshot(baseline.entries.keys().cloned()).await?;
-        let differences = baseline.differences(&after);
-        if differences.is_empty() {
-            Ok(())
-        } else {
-            Err(Error::Assertion(format!(
-                "filesystem snapshot differences: {differences:?}"
-            )))
-        }
-    }
 }
 
 #[cfg(test)]
@@ -169,66 +98,44 @@ mod tests {
     use crate::CommandResult;
 
     #[test]
-    fn differences_are_sorted_and_distinguish_all_changes() {
-        let before = FilesystemSnapshot {
-            entries: BTreeMap::from([
-                ("z".into(), PathState::Missing),
-                ("b".into(), PathState::Directory),
-                (
-                    "a".into(),
-                    PathState::RegularFile {
-                        content: vec![0, 255],
-                    },
-                ),
-                (
-                    "c".into(),
-                    PathState::Symlink {
-                        target: b"../literal\n".to_vec(),
-                    },
-                ),
-            ]),
-        };
-        let mut after = before.clone();
-        after.entries.insert("z".into(), PathState::Directory);
-        after
-            .entries
-            .insert("b".into(), PathState::RegularFile { content: vec![] });
-        after
-            .entries
-            .insert("a".into(), PathState::RegularFile { content: vec![0] });
-        after.entries.insert(
-            "c".into(),
-            PathState::Symlink {
-                target: b"missing".to_vec(),
-            },
-        );
-        assert_eq!(before.differences(&before), []);
-        let differences = before.differences(&after);
+    fn decoded_snapshot_preserves_sorted_paths_and_exact_states() -> Result<(), Error> {
+        let snapshot = decode_snapshot(
+            &["/file".into(), "/link".into()],
+            vec![
+                WireEntry {
+                    path: "/file".into(),
+                    kind: WireKind::File,
+                    data: vec![0, 255],
+                    target: vec![],
+                },
+                WireEntry {
+                    path: "/link".into(),
+                    kind: WireKind::Symlink,
+                    data: vec![],
+                    target: b"../literal\n".to_vec(),
+                },
+            ],
+        )?;
         assert_eq!(
-            differences
-                .iter()
-                .map(|diff| diff.path.as_str())
-                .collect::<Vec<_>>(),
-            ["a", "b", "c", "z"]
-        );
-        assert_eq!(
-            differences
-                .iter()
-                .map(|diff| diff.changes.clone())
-                .collect::<Vec<_>>(),
-            [
-                vec![SnapshotChange::Content],
-                vec![SnapshotChange::Kind],
-                vec![SnapshotChange::Target],
-                vec![SnapshotChange::Existence]
-            ]
-        );
-        assert_eq!(
-            before.entries["a"],
-            PathState::RegularFile {
-                content: vec![0, 255]
+            snapshot,
+            FilesystemSnapshot {
+                entries: BTreeMap::from([
+                    (
+                        "/file".into(),
+                        PathState::RegularFile {
+                            content: vec![0, 255]
+                        }
+                    ),
+                    (
+                        "/link".into(),
+                        PathState::Symlink {
+                            target: b"../literal\n".to_vec()
+                        }
+                    ),
+                ]),
             }
         );
+        Ok(())
     }
 
     #[test]

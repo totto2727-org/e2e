@@ -5,17 +5,13 @@ It uses [Testcontainers for Node.js](https://node.testcontainers.org/) and imple
 
 ## Setup
 
-> [!IMPORTANT]
-> The package is not yet published.
-> The declaration below uses the current metadata version, not an available npm release.
-
 | Requirement                    | Consumer setup                                                                                      |
 | ------------------------------ | --------------------------------------------------------------------------------------------------- |
 | Runtime                        | Node.js 24 or newer.                                                                                |
 | Container image and Engine     | [Shared prerequisites](../README.md#prerequisites-and-setup) and [Docker support](#docker-support). |
 | Test framework for the example | Vitest in your test dependencies.                                                                   |
 
-After publication, add the dependency to your `package.json` and install it with your package manager:
+Add the dependency to your `package.json` and install it with your package manager:
 
 ```json
 {
@@ -32,15 +28,17 @@ Consumers do not build this repository.
 
 ```ts
 import { withEnvironment } from '@totto2727/caseyard'
-import { expect, test } from 'vitest'
+import { test } from 'vitest'
 
 test.concurrent('greeting', async (context) => {
   await withEnvironment(
     'my-application:local',
     async (environment) => {
-      expect(
-        await environment.run({ args: ['my-application', 'hello'], workingDir: '/workspace', env: ['MODE=test'] }),
-      ).toEqual({ exitCode: 0, stdout: 'hello\n', stderr: '' })
+      context
+        .expect(
+          await environment.run({ args: ['my-application', 'hello'], workingDir: '/workspace', env: ['MODE=test'] }),
+        )
+        .toEqual({ exitCode: 0, stdout: 'hello\n', stderr: '' })
     },
     context.signal,
   )
@@ -77,18 +75,19 @@ The promise returns the callback value after cleanup succeeds.
 | `Result`        | `exitCode: number`, `stdout: string`, `stderr: string`                      |
 | `PartialResult` | `stdout: string`, `stderr: string`, `exitCode?: never`                      |
 
-| `Environment` member                                | Type              |
-| --------------------------------------------------- | ----------------- |
-| `readonly signal`                                   | `AbortSignal`     |
-| `run(command: Command)`                             | `Promise<Result>` |
-| `checkCommand(command: Command, expected: Result)`  | `Promise<void>`   |
-| `writeFile(path: string, bytes: Uint8Array)`        | `Promise<void>`   |
-| `readFile(path: string)`                            | `Promise<Buffer>` |
-| `checkFile(path: string, expected: Uint8Array)`     | `Promise<void>`   |
-| `checkMissing(path: string)`                        | `Promise<void>`   |
-| `checkRegularFile(path: string)`                    | `Promise<void>`   |
-| `checkDirectory(path: string)`                      | `Promise<void>`   |
-| `checkSymlink(path: string, literalTarget: string)` | `Promise<void>`   |
+| `Environment` member                         | Type                |
+| -------------------------------------------- | ------------------- |
+| `readonly signal`                            | `AbortSignal`       |
+| `run(command: Command)`                      | `Promise<Result>`   |
+| `writeFile(path: string, bytes: Uint8Array)` | `Promise<void>`     |
+| `readFile(path: string)`                     | `Promise<Buffer>`   |
+| `pathKind(path: string)`                     | `Promise<PathKind>` |
+| `readSymlink(path: string)`                  | `Promise<string>`   |
+
+`PathKind` is `'missing' | 'file' | 'directory' | 'symlink' | 'other'` and never follows a link to classify its target.
+`readSymlink` returns the literal decoded target without the command's final newline.
+It preserves newlines in the target, but exact arbitrary target bytes require a snapshot.
+Use your framework's matchers on returned observations, for example `context.expect(await environment.readFile(path)).toEqual(bytes)`.
 
 Environment entries must use `NAME=value` with a nonempty name.
 Empty values and values that contain `=` are preserved, and the last entry for a duplicate name wins.
@@ -99,104 +98,57 @@ Its string decoding does not guarantee strict UTF-8 validation or preservation a
 
 ## Filesystem snapshots
 
-Use `await environment.snapshot(paths)` to capture explicit paths and `await environment.checkSnapshot(expected)` to check a baseline without changing it.
-Snapshots and terminals require a caller-supplied static Linux driver binary for the container architecture.
-Call `await installDriver(environment, executableBytes)` once inside each environment before these operations.
-Import `installDriver` from `@totto2727/caseyard`.
-Build or acquire the [shared driver](../go/cmd/caseyard-driver) as an artifact alongside your application image.
-The library stages the bytes in a private temporary directory and makes the driver executable.
-The container owns the staged file lifetime.
-The image needs `mktemp`, but it does not need Go or Python.
-The private driver uses mode `0755` inside its private directory, including in non-root images.
-Ordinary `writeFile` calls still use mode `0644`.
-Existing command and file operations do not need the driver.
+See the [shared snapshot contract](../README.md#file-state-snapshots), [driver setup](../README.md#static-driver-for-snapshots-and-terminals), and the [snapshot example](./test/docker.test.ts#L173).
+Functions and types below are exported from `@totto2727/caseyard`.
 
-```ts
-const before = await environment.snapshot(['/workspace/output', '/workspace/config'])
-await environment.run({ args: ['my-application', 'update'] })
-const after = await environment.snapshot(['/workspace/output', '/workspace/config'])
-const differences = compareSnapshots(before, after)
-```
+| API or value                                                                     | TypeScript contract                                                                                                                                                                                                 |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `installDriver(environment: Environment, executable: Uint8Array): Promise<void>` | Installs once per environment. Rejects empty bytes and concurrent or replacement installations. Failed installations can be retried. Required for nonempty snapshots and terminals, not command or file operations. |
+| `environment.snapshot(paths: readonly string[]): Promise<FilesystemSnapshot>`    | Sorts paths and captures duplicates once. Empty input returns an empty snapshot.                                                                                                                                    |
+| `FilesystemSnapshot`                                                             | Plain `{ entries: readonly SnapshotEntry[] }` observation. File and link-target buffers are defensive copies on every read.                                                                                         |
+| `SnapshotEntry`                                                                  | `{ path: string, state: FileState }`.                                                                                                                                                                               |
+| `FileState`                                                                      | `{ kind: 'missing' }`, `{ kind: 'file', bytes: Buffer }`, `{ kind: 'directory' }`, or `{ kind: 'symlink', target: Buffer }`.                                                                                        |
 
-Import `compareSnapshots` from `@totto2727/caseyard` for pure comparisons.
-Each `FilesystemSnapshot.entries` item contains a `path` and a `state`.
-State is `{ kind: 'missing' }`, `{ kind: 'file', bytes: Buffer }`, `{ kind: 'directory' }`, or `{ kind: 'symlink', target: Buffer }`.
-Regular files preserve exact bytes, and links preserve literal targets, including dangling links.
-Returned file and link-target byte buffers are defensive copies.
-Paths are sorted, and repeated capture paths are captured once.
-Comparisons return sorted `{ path, reason }` differences with `existence`, `kind`, `content`, or `target` reasons.
-Paths present in only one snapshot produce an `existence` difference.
-
-Snapshots are read-only and do not update baselines, traverse directories, or compare metadata.
-Only a missing path is absence. Permission errors, read errors, invalid traversal, and unsupported kinds such as FIFOs reject capture.
-Capture is not atomic across paths or concurrent filesystem changes.
-Symbolic-link targets preserve arbitrary bytes without text decoding.
+Compare observations with `context.expect(await environment.snapshot(paths)).toEqual(before)`.
+Use `context.expect(await environment.snapshot(paths)).toMatchSnapshot()` for a reviewed, saved Vitest baseline, including exact bytes and literal link targets.
+Vitest owns baseline creation, comparison, and explicit updates with `vitest -u`.
+The library never stores or updates baselines.
 
 ## Terminal sessions
 
-After [driver installation](#filesystem-snapshots), use `withTerminal(environment, command, options, callback)` from `@totto2727/caseyard`.
-The command inherits its `workingDir` and `env` settings.
-The callback receives a `TerminalSession` and can also use ordinary environment operations.
+See the [shared terminal contract](../README.md#terminal-sessions) and the [terminal example](./test/docker.test.ts#L284).
+`withTerminal` and the types below are exported from `@totto2727/caseyard`.
+Session methods belong to `TerminalSession`.
 
-```ts
-await withTerminal(
-  environment,
-  { args: ['my-application', 'interactive'] },
-  { rows: 24, columns: 80 },
-  async (terminal) => {
-    await terminal.expect('terminal', Buffer.from('Ready> '))
-    await terminal.send(Buffer.from('quit\n'))
-    const result = await terminal.wait()
-    expect(result.status).toEqual({ kind: 'exited', code: 0 })
-    expect(result.termiosRestored).toBe(true)
-  },
-)
-```
-
-| `TerminalSession` member           | Behavior                                                                                                                                                                                 |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `observe()`                        | Return cumulative raw buffers and current process and terminal settings without waiting for exit.                                                                                        |
-| `expect(channel, bytes, timeout?)` | Match nonempty raw bytes on `stdout` or `terminal`, including matches across reads. Each channel has an independent consumed cursor. Trailing bytes remain available for the next match. |
-| `send(bytes)`                      | Write literal bytes to terminal stdin. Ctrl-C and Ctrl-D bytes are not API signal or close operations.                                                                                   |
-| `resize(rows, columns)`            | Set terminal geometry and send SIGWINCH to the foreground process group.                                                                                                                 |
-| `signal(name)`                     | Send `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT`, `SIGKILL`, `SIGUSR1`, or `SIGUSR2` to the application process group.                                                                      |
-| `wait(timeout?)`                   | Wait for process exit and return drained output and final observations.                                                                                                                  |
-
-All session methods return `Promise<TerminalObservation>`.
-`stdout`, `terminal`, and `unreadInput` are `Buffer` values with no text decoding or ANSI removal.
-Stdout uses a separate pipe. Stderr uses the terminal. There is no cross-channel ordering guarantee.
-Status is `{ kind: 'running' }`, `{ kind: 'exited', code }`, or `{ kind: 'signaled', signal }`.
-`initialTermios` and `currentTermios` contain normalized terminal settings.
-`termiosRestored` compares those settings, excluding the kernel bookkeeping flag PENDIN.
-A true flag while the process runs does not prove that the application restores settings on exit.
-Screen and cursor restoration checks remain caller-owned assertions on raw terminal bytes.
-
-Options default to `rows: 40`, `columns: 120`, and `timeout: 50` seconds.
-Geometry must use integers from 1 through 65535.
-Timeouts must be finite, positive, and at most 60 seconds. They do not extend the environment deadline.
-Set `input: Uint8Array` to supply finite pipe stdin followed by EOF while stderr remains on the terminal.
-In pipe mode, `send` rejects and `unreadInput` reports bytes not consumed by the application after exit.
-
-Await every session operation before the callback returns.
-The scope closes the terminal on success or failure and invalidates the handle.
-Terminal cleanup has a fresh 30-second waiting budget independent of the environment operation budget.
-Callback and cleanup failures are retained together in an `AggregateError`.
-An expected-byte timeout or premature exit raises `TerminalError`, with captured raw output in `observation` when the driver provides it.
-On environment cancellation, container teardown is the final process boundary.
-The terminal watchdog also stops surviving application processes if the client disappears.
+| API or value                                                                                                                                           | TypeScript contract                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `withTerminal<T>(environment: Environment, command: Command, options: TerminalOptions, action: (terminal: TerminalSession) => Promise<T>): Promise<T>` | Returns the callback value after cleanup. Await all session operations before the callback returns.                                                                                                                                                                               |
+| `TerminalOptions`                                                                                                                                      | `rows?: number`, `columns?: number`, `timeout?: number` (seconds), `input?: Uint8Array`. Omitted fields select shared defaults.                                                                                                                                                   |
+| `observe()`                                                                                                                                            | `Promise<TerminalObservation>`, as for all session methods below.                                                                                                                                                                                                                 |
+| `expect(channel: TerminalChannel, bytes: Uint8Array, timeout?: number)`                                                                                | Matches output. Timeout in seconds.                                                                                                                                                                                                                                               |
+| `send(bytes: Uint8Array)`                                                                                                                              | Sends terminal input.                                                                                                                                                                                                                                                             |
+| `resize(rows: number, columns: number)`                                                                                                                | Sets terminal geometry.                                                                                                                                                                                                                                                           |
+| `signal(name: TerminalSignal)`                                                                                                                         | Sends a supported signal.                                                                                                                                                                                                                                                         |
+| `wait(timeout?: number)`                                                                                                                               | Waits for exit and drained output. Timeout in seconds.                                                                                                                                                                                                                            |
+| `TerminalChannel`                                                                                                                                      | `'stdout'` or `'terminal'`.                                                                                                                                                                                                                                                       |
+| `TerminalSignal`                                                                                                                                       | `'SIGINT'`, `'SIGTERM'`, `'SIGHUP'`, `'SIGQUIT'`, `'SIGKILL'`, `'SIGUSR1'`, or `'SIGUSR2'`.                                                                                                                                                                                       |
+| `TerminalObservation`                                                                                                                                  | `stdout`, `terminal`, `unreadInput`: `Buffer`. `status`: `TerminalStatus`. `initialTermios`, `currentTermios`: terminal settings. `termiosRestored`: `boolean`.                                                                                                                   |
+| `TerminalStatus`                                                                                                                                       | `{ kind: 'running' }`, `{ kind: 'exited', code: number }`, or `{ kind: 'signaled', signal: number }`.                                                                                                                                                                             |
+| `TerminalError.observation`                                                                                                                            | Captured output on expected-byte timeout or premature exit, when supplied by the driver.                                                                                                                                                                                          |
+| Scope cleanup                                                                                                                                          | Invalidates the handle on success or failure. Uses a fresh 30-second waiting budget independent of the environment operation budget. Callback and cleanup failures produce an `AggregateError`. After environment cancellation, container teardown is the final process boundary. |
 
 ## Errors, deadlines and cleanup
 
-| Condition                                                                                                         | Rejection or cause                                                                         |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Invalid command strings, empty argv or executable, invalid image, empty file path, or malformed environment entry | `TypeError`. NUL is invalid in command strings, image names, file paths, and link targets. |
-| Command execution failure                                                                                         | `ExecutionError` with empty `partialResult` streams and a `cause`, but no exit code.       |
-| Docker failure                                                                                                    | `DockerError`, with optional `statusCode`. Daemon diagnostics do not enter child stderr.   |
-| Operation deadline                                                                                                | `DeadlineError`.                                                                           |
-| Callback rejection                                                                                                | The original value, including a non-Error value, unless cleanup also fails.                |
-| Callback returns after cancellation                                                                               | The cancellation reason.                                                                   |
-| Multiple operation or cleanup failures                                                                            | `AggregateError` containing the failures.                                                  |
-| Cleanup failure alone                                                                                             | The cleanup error.                                                                         |
+| Condition                                                                                                         | Rejection or cause                                                                       |
+| ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Invalid command strings, empty argv or executable, invalid image, empty file path, or malformed environment entry | `TypeError`. NUL is invalid in command strings, image names, and file paths.             |
+| Command execution failure                                                                                         | `ExecutionError` with empty `partialResult` streams and a `cause`, but no exit code.     |
+| Docker failure                                                                                                    | `DockerError`, with optional `statusCode`. Daemon diagnostics do not enter child stderr. |
+| Operation deadline                                                                                                | `DeadlineError`.                                                                         |
+| Callback rejection                                                                                                | The original value, including a non-Error value, unless cleanup also fails.              |
+| Callback returns after cancellation                                                                               | The cancellation reason.                                                                 |
+| Multiple operation or cleanup failures                                                                            | `AggregateError` containing the failures.                                                |
+| Cleanup failure alone                                                                                             | The cleanup error.                                                                       |
 
 An `ExecutionError` cause can be a `DockerError`, `DeadlineError`, or cancellation reason.
 A `DockerError` retains the underlying Testcontainers error as its `cause`.

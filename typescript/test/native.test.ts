@@ -8,8 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import {
   DeadlineError,
   DockerError,
-  FilesystemSnapshot,
-  compareSnapshots,
+  type FilesystemSnapshot,
   installDriver,
   withTerminal,
   type TerminalSession,
@@ -133,10 +132,10 @@ describe('Commands', () => {
       })
     })
   })
-  test('empty expected stderr asserts absence', async () => {
+  test('returns unexpected stderr unchanged for framework assertions', async () => {
     backend.container.exec.mockResolvedValue({ ...empty, output: 'diagnostic', stderr: 'diagnostic' })
     await scoped(async (env) => {
-      await expect(env.checkCommand({ args: ['tool'] }, empty)).rejects.toThrow('mismatch')
+      await expect(env.run({ args: ['tool'] })).resolves.toEqual({ ...empty, stderr: 'diagnostic' })
     })
   })
   test('returns the decoded text supplied by Testcontainers without trimming', async () => {
@@ -323,14 +322,6 @@ describe('File operations', () => {
       await expect(env.readFile('/workspace/binary')).resolves.toEqual(bytes)
     })
   })
-  test('reports file comparison mismatches', async () => {
-    backend.container.copyArchiveFromContainer.mockResolvedValue(
-      archive([{ name: 'file', bytes: Buffer.from('actual') }]),
-    )
-    await scoped(async (env) => {
-      await expect(env.checkFile('/file', Buffer.from('expected'))).rejects.toThrow('mismatch')
-    })
-  })
   test.each([
     { entries: [] },
     { entries: [{ name: 'dir', type: 'directory' as const }] },
@@ -405,33 +396,64 @@ describe('File operations', () => {
   })
 })
 
-describe('Physical path assertions', () => {
-  test.each(['checkMissing', 'checkRegularFile', 'checkDirectory'] as const)(
-    '%s rejects probe exit code 2',
-    async (method) => {
-      backend.container.exec.mockResolvedValue({
-        exitCode: 2,
-        stdout: '',
-        stderr: 'probe failed',
-        output: 'probe failed',
-      })
-      await scoped(async (env) => {
-        await expect(env[method]('/path')).rejects.toBeInstanceOf(DockerError)
-      })
-    },
-  )
-  test.each(['checkMissing', 'checkRegularFile', 'checkDirectory'] as const)(
-    '%s rejects a symbolic link even if its target matches',
-    async (method) => {
-      await scoped(async (env) => {
-        await expect(env[method]('/path')).rejects.toThrow('Expected')
-      })
-    },
-  )
-  test('symlink comparison requires its literal target', async () => {
-    backend.container.exec.mockResolvedValue({ ...empty, stdout: 'relative-target\n', output: 'relative-target\n' })
+describe('Physical path observations', () => {
+  test.each(['pathKind', 'readSymlink'] as const)('%s rejects invalid paths before execution', async (method) => {
     await scoped(async (env) => {
-      await expect(env.checkSymlink('/link', '/absolute-target')).rejects.toThrow('mismatch')
+      for (const path of ['', 'bad\0path']) await expect(env[method](path)).rejects.toBeInstanceOf(TypeError)
+    })
+    expect(backend.container.exec).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    { exits: [0], kind: 'symlink' },
+    { exits: [1, 0], kind: 'file' },
+    { exits: [1, 1, 0], kind: 'directory' },
+    { exits: [1, 1, 1, 1], kind: 'missing' },
+    { exits: [1, 1, 1, 0], kind: 'other' },
+  ])('classifies physical $kind without reading its content or target', async ({ exits, kind }) => {
+    for (const exitCode of exits) backend.container.exec.mockResolvedValueOnce({ ...empty, output: '', exitCode })
+    await scoped(async (env) => {
+      await expect(env.pathKind('/path')).resolves.toBe(kind)
+    })
+    expect(backend.container.exec).toHaveBeenCalledTimes(exits.length)
+    expect(backend.container.copyArchiveFromContainer).not.toHaveBeenCalled()
+  })
+
+  test.each([0, 1, 2, 3])('probe failure at step %i is not absence', async (step) => {
+    for (let index = 0; index < step; index++)
+      backend.container.exec.mockResolvedValueOnce({ ...empty, output: '', exitCode: 1 })
+    backend.container.exec.mockResolvedValueOnce({ ...empty, exitCode: 2, stderr: 'probe failed', output: '' })
+    await scoped(async (env) => {
+      await expect(env.pathKind('/path')).rejects.toBeInstanceOf(DockerError)
+    })
+  })
+
+  test.each(['relative-target', '../target\n', '\ufefftarget\n\n'])(
+    'reads literal decoded link target %j',
+    async (target) => {
+      backend.container.exec.mockResolvedValue({ ...empty, stdout: `${target}\n`, output: `${target}\n` })
+      await scoped(async (env) => {
+        await expect(env.readSymlink('/link')).resolves.toBe(target)
+      })
+    },
+  )
+
+  test.each([
+    { ...empty, exitCode: 1 },
+    { ...empty, stdout: 'no newline' },
+    { ...empty, stdout: 'target\n', stderr: 'diagnostic' },
+  ])('link read failure is not an empty target: %j', async (result) => {
+    backend.container.exec.mockResolvedValue({ ...result, output: '' })
+    await scoped(async (env) => {
+      await expect(env.readSymlink('/link')).rejects.toBeInstanceOf(DockerError)
+    })
+  })
+
+  test.each(['pathKind', 'readSymlink'] as const)('%s preserves infrastructure errors', async (method) => {
+    const cause = new Error('daemon failed')
+    backend.container.exec.mockRejectedValue(cause)
+    await scoped(async (env) => {
+      await expect(env[method]('/path')).rejects.toMatchObject({ name: 'ExecutionError', cause: { cause } })
     })
   })
 })
@@ -764,14 +786,19 @@ describe('Scoped terminals', () => {
 })
 
 describe('Filesystem snapshots', () => {
-  test('defensively copies arbitrary link target bytes on construction and observation', () => {
-    const target = Buffer.from([255, 10])
-    const snapshot = new FilesystemSnapshot([{ path: '/link', state: { kind: 'symlink', target } }])
-    target.fill(0)
-    const state = snapshot.entries[0]!.state
-    if (state.kind !== 'symlink') throw new Error('Expected symlink')
-    state.target.fill(1)
-    expect(snapshot.entries).toEqual([{ path: '/link', state: { kind: 'symlink', target: Buffer.from([255, 10]) } }])
+  test('defensively copies arbitrary link target bytes on observation', async () => {
+    backend.container.exec.mockResolvedValue(
+      driverResult([{ path: '/link', kind: 'symlink', data: [], target: [255, 10] }]),
+    )
+    await driverScoped(async (env) => {
+      const snapshot = await env.snapshot(['/link'])
+      const state = snapshot.entries[0]!.state
+      if (state.kind !== 'symlink') throw new Error('Expected symlink')
+      state.target.fill(1)
+      expect(snapshot).toEqual({
+        entries: [{ path: '/link', state: { kind: 'symlink', target: Buffer.from([255, 10]) } }],
+      })
+    })
   })
 
   test('empty explicit path sets do not execute or require driver installation', async () => {
@@ -825,43 +852,69 @@ describe('Filesystem snapshots', () => {
     expect(backend.container.copyArchiveFromContainer).not.toHaveBeenCalled()
   })
 
-  test('detaches input and output byte buffers', () => {
-    const bytes = Buffer.from([0, 255])
-    const snapshot = new FilesystemSnapshot([{ path: '/file', state: { kind: 'file', bytes } }])
-    bytes.fill(1)
-    const state = snapshot.entries[0]!.state
-    if (state.kind !== 'file') throw new Error('Expected file')
-    state.bytes.fill(2)
-    expect(snapshot.entries).toEqual([{ path: '/file', state: { kind: 'file', bytes: Buffer.from([0, 255]) } }])
-    expect(Object.isFrozen(snapshot.entries)).toBe(true)
+  test('detaches captured byte buffers on every read', async () => {
+    backend.container.exec.mockResolvedValue(
+      driverResult([{ path: '/file', kind: 'file', data: [0, 255], target: [] }]),
+    )
+    await driverScoped(async (env) => {
+      const snapshot = await env.snapshot(['/file'])
+      const state = snapshot.entries[0]!.state
+      if (state.kind !== 'file') throw new Error('Expected file')
+      state.bytes.fill(2)
+      expect(snapshot).toEqual({ entries: [{ path: '/file', state: { kind: 'file', bytes: Buffer.from([0, 255]) } }] })
+      expect(Object.isFrozen(snapshot.entries)).toBe(true)
+      expect(Object.isFrozen(snapshot)).toBe(true)
+    })
   })
 
-  test('returns deterministic existence, kind, content and target differences without changing snapshots', () => {
-    const expected = new FilesystemSnapshot([
-      { path: '/target', state: { kind: 'symlink', target: Buffer.from('before') } },
-      { path: '/kind', state: { kind: 'directory' } },
-      { path: '/exists', state: { kind: 'missing' } },
-      { path: '/content', state: { kind: 'file', bytes: Buffer.from([0, 255]) } },
-    ])
-    const actual = new FilesystemSnapshot([
-      { path: '/content', state: { kind: 'file', bytes: Buffer.from([0, 254]) } },
-      { path: '/exists', state: { kind: 'directory' } },
-      { path: '/kind', state: { kind: 'symlink', target: Buffer.from('directory') } },
-      { path: '/target', state: { kind: 'symlink', target: Buffer.from('after') } },
-    ])
-    expect(compareSnapshots(expected, actual)).toEqual([
-      { path: '/content', reason: 'content' },
-      { path: '/exists', reason: 'existence' },
-      { path: '/kind', reason: 'kind' },
-      { path: '/target', reason: 'target' },
-    ])
-    expect(compareSnapshots(expected, expected)).toEqual([])
-    expect(compareSnapshots(new FilesystemSnapshot([]), expected).map(({ reason }) => reason)).toEqual([
-      'existence',
-      'existence',
-      'existence',
-      'existence',
-    ])
+  test('exposes sorted plain state for framework equality and saved snapshots', async ({ expect }) => {
+    backend.container.exec.mockResolvedValue(
+      driverResult([
+        { path: '/content', kind: 'file', data: [0, 255, 13, 10], target: [] },
+        { path: '/directory', kind: 'directory', data: [], target: [] },
+        { path: '/missing', kind: 'missing', data: [], target: [] },
+        { path: '/target', kind: 'symlink', data: [], target: [255, 10] },
+      ]),
+    )
+    await driverScoped(async (env) => {
+      const snapshot = await env.snapshot(['/target', '/missing', '/content', '/directory'])
+      expect(snapshot).toMatchSnapshot()
+      expect(snapshot).toEqual({
+        entries: [
+          { path: '/content', state: { kind: 'file', bytes: Buffer.from([0, 255, 13, 10]) } },
+          { path: '/directory', state: { kind: 'directory' } },
+          { path: '/missing', state: { kind: 'missing' } },
+          { path: '/target', state: { kind: 'symlink', target: Buffer.from([255, 10]) } },
+        ],
+      })
+    })
+  })
+
+  test.each([
+    { path: '/different', state: { kind: 'file' as const, bytes: Buffer.from([0, 255]) } },
+    { path: '/file', state: { kind: 'file' as const, bytes: Buffer.from([0, 254]) } },
+    { path: '/file', state: { kind: 'missing' as const } },
+    { path: '/file', state: { kind: 'directory' as const } },
+    { path: '/file', state: { kind: 'symlink' as const, target: Buffer.from([0, 255]) } },
+  ])('native equality sees changed path, bytes, presence or kind: %j', async (entry) => {
+    backend.container.exec.mockResolvedValue(
+      driverResult([{ path: '/file', kind: 'file', data: [0, 255], target: [] }]),
+    )
+    await driverScoped(async (env) => {
+      expect(await env.snapshot(['/file'])).not.toEqual({ entries: [entry] })
+      expect(await env.snapshot(['/file'])).not.toEqual({ entries: [] })
+    })
+  })
+
+  test('native equality sees changed literal link target bytes', async () => {
+    backend.container.exec.mockResolvedValue(
+      driverResult([{ path: '/link', kind: 'symlink', data: [], target: [255] }]),
+    )
+    await driverScoped(async (env) => {
+      expect(await env.snapshot(['/link'])).not.toEqual({
+        entries: [{ path: '/link', state: { kind: 'symlink', target: Buffer.from([254]) } }],
+      })
+    })
   })
 
   test.each(['', 'bad\0path'])('rejects invalid path %j without executing classification', async (path) => {
@@ -908,13 +961,13 @@ describe('Filesystem snapshots', () => {
     })
   })
 
-  test('checks without updating the baseline and reports sorted path reasons', async () => {
+  test('recapture returns changed state without changing the baseline', async () => {
     backend.container.exec.mockResolvedValue(driverResult([{ path: '/path', kind: 'directory', data: [], target: [] }]))
-    const baseline = new FilesystemSnapshot([{ path: '/path', state: { kind: 'missing' } }])
+    const baseline: FilesystemSnapshot = { entries: [{ path: '/path', state: { kind: 'missing' } }] }
     await driverScoped(async (env) => {
-      await expect(env.checkSnapshot(baseline)).rejects.toThrow(
-        'Filesystem snapshot mismatch: [{"path":"/path","reason":"existence"}]',
-      )
+      expect((await env.snapshot(baseline.entries.map(({ path }) => path))).entries).toEqual([
+        { path: '/path', state: { kind: 'directory' } },
+      ])
     })
     expect(baseline.entries).toEqual([{ path: '/path', state: { kind: 'missing' } }])
   })

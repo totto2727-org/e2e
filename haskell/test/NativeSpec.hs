@@ -5,7 +5,7 @@ module NativeSpec (spec) where
 import Prelude hiding (readFile, writeFile)
 import Control.Concurrent.Async
 import Control.Concurrent.MVar
-import Control.Exception hiding (AssertionFailed)
+import Control.Exception
 import Control.Monad (forM_, void)
 import Data.Aeson.Types (Pair)
 import Data.Aeson hiding (Result)
@@ -77,10 +77,6 @@ spec = do
     it "returns application code 7 with separate streams" $
       withExec (frame 1 "out" <> frame 2 "err") 7 $ \environment ->
         run environment (Command ["program", ""] (Just "/work") ["X="]) `shouldReturn` Result 7 "out" "err"
-    forM_ [Result 0 "out" "err", Result 7 "" "err", Result 7 "out" ""] $ \wrong ->
-      it ("compares all result fields: " ++ show wrong) $
-        withExec (frame 1 "out" <> frame 2 "err") 7 $ \environment ->
-          checkCommand environment (Command ["program"] Nothing []) wrong `shouldThrow` assertionFailure
     it "does not treat an HTTP attach failure as a process result" $
       withServer (\incoming socket -> if target incoming == "/containers/c/exec"
         then respond socket 201 "{\"Id\":\"e\"}" else respond socket 500 "daemon failure") $ \host ->
@@ -133,13 +129,12 @@ spec = do
               Tar.entryPermissions entry `shouldBe` 0o644
               Tar.entryContent entry `shouldBe` Tar.NormalFile (LBS.pack [0,255,10]) 3
             archive -> expectationFailure (show archive)
-    it "reads exact bytes and rejects a file comparison mismatch" $ do
+    it "reads exact bytes" $ do
       path <- either (throwIO . userError) pure (Tar.toTarPath False "data.bin")
       let archive = LBS.toStrict (Tar.write [Tar.fileEntry path (LBS.pack [0,255,10])])
       withServer (\_ socket -> respond socket 200 archive) $ \host ->
         withTestEnvironment host 1000000000 $ \environment -> do
           readFile environment "/workspace/data.bin" `shouldReturn` BS.pack [0,255,10]
-          checkFile environment "/workspace/data.bin" "wrong" `shouldThrow` assertionFailure
     it "rejects malformed archives" $
       withServer (\_ socket -> respond socket 200 "not a tar") $ \host ->
         withTestEnvironment host 1000000000 $ \environment ->
@@ -153,20 +148,29 @@ spec = do
     it "rejects NUL file paths before transport" $
       withTestEnvironment "http://127.0.0.1:1" 1000000000 $ \environment ->
         writeFile environment "/workspace/x\0y" "bytes" `shouldThrow` invalidInput
-  describe "physical path probes" $ do
-    it "rejects a dangling link as missing" $
+  describe "physical path observations" $ do
+    forM_ ["", "/bad\0path"] $ \path ->
+      it ("rejects invalid observation paths before transport: " ++ show path) $
+        withTestEnvironment "http://127.0.0.1:1" 1000000000 $ \e -> do
+          pathKind e path `shouldThrow` invalidInput
+          readSymlink e path `shouldThrow` invalidInput
+    forM_ [("-L", PathSymlink), ("-f", PathRegularFile), ("-d", PathDirectory), ("-e", PathOther)] $ \(flag, kind) ->
+      it ("observes " ++ show kind ++ " without following links") $
+        withCommands (\argv -> if argv == ["test", flag, "/path"] then Result 0 "" "" else Result 1 "" "") $ \e ->
+          pathKind e "/path" `shouldReturn` kind
+    it "observes a missing path" $
+      withCommands (const (Result 1 "" "")) $ \e -> pathKind e "/missing" `shouldReturn` PathMissing
+    it "classifies a dangling link before following its target" $
       withCommands (\argv -> if argv == ["test", "-L", "/dangling"] then Result 0 "" "" else Result 1 "" "") $ \e ->
-        checkMissing e "/dangling" `shouldThrow` assertionFailure
-    it "rejects a symbolic link to a regular file" $
-      withCommands (const (Result 0 "" "")) $ \e -> checkRegularFile e "/link" `shouldThrow` assertionFailure
-    it "rejects a symbolic link to a directory" $
-      withCommands (const (Result 0 "" "")) $ \e -> checkDirectory e "/link" `shouldThrow` assertionFailure
-    it "compares the literal target rather than its resolved path" $
-      withCommands (\argv -> if take 1 argv == ["readlink"] then Result 0 "relative\n" "" else Result 0 "" "") $ \e -> do
-        checkSymlink e "/link" "relative"
-        checkSymlink e "/link" "/resolved/relative" `shouldThrow` assertionFailure
+        pathKind e "/dangling" `shouldReturn` PathSymlink
+    it "preserves literal target bytes and removes only the readlink delimiter" $
+      withCommands (const (Result 0 (BS.pack [255] <> "relative\n\n") "")) $ \e ->
+        readSymlink e "/link" `shouldReturn` (BS.pack [255] <> "relative\n")
     it "rejects probe code 2 as infrastructure failure" $
-      withCommands (const (Result 2 "" "bad probe")) $ \e -> checkMissing e "/path" `shouldThrow` infrastructure
+      withCommands (const (Result 2 "" "bad probe")) $ \e -> pathKind e "/path" `shouldThrow` infrastructure
+    forM_ [Result 1 "" "not a link", Result 0 "unterminated" "", Result 0 "target\n" "diagnostic"] $ \failure ->
+      it ("rejects failed or malformed link reads: " ++ show failure) $
+        withCommands (const failure) $ \e -> readSymlink e "/path" `shouldThrow` infrastructure
   describe "driver installation" $ do
     it "transfers exact executable bytes without chmod on a root-owned archive entry" $ do
       uploaded <- newEmptyMVar
@@ -200,22 +204,7 @@ spec = do
       withCommands (const (snapshotReply entries)) $ \e -> do
         captured <- captureSnapshot (Driver e "/driver") ["/missing", "/link", "/dir", "/bytes", "/bytes"]
         captured `shouldBe` FileSystemSnapshot (Map.fromList entries)
-        checkSnapshot (Driver e "/driver") captured
-    it "reports sorted existence, kind, exact content and literal target changes" $ do
-      let before = FileSystemSnapshot (Map.fromList
-            [("/d", Symlink "relative"), ("/b", Directory), ("/a", Missing), ("/c", RegularFile (BS.pack [0,255]))])
-          after = FileSystemSnapshot (Map.fromList
-            [("/c", RegularFile (BS.pack [0,254])), ("/a", RegularFile ""), ("/d", Symlink "/relative"), ("/b", Symlink "directory")])
-      diffSnapshots before after `shouldBe`
-        [ SnapshotDifference "/a" ExistenceChanged (Just Missing) (Just (RegularFile ""))
-        , SnapshotDifference "/b" KindChanged (Just Directory) (Just (Symlink "directory"))
-        , SnapshotDifference "/c" ContentChanged (Just (RegularFile (BS.pack [0,255]))) (Just (RegularFile (BS.pack [0,254])))
-        , SnapshotDifference "/d" TargetChanged (Just (Symlink "relative")) (Just (Symlink "/relative"))
-        ]
-      diffSnapshots before before `shouldBe` []
-    it "does not confuse an unselected path with an observed missing path" $
-      diffSnapshots (FileSystemSnapshot Map.empty) (FileSystemSnapshot (Map.singleton "/absent" Missing))
-        `shouldBe` [SnapshotDifference "/absent" ExistenceChanged Nothing (Just Missing)]
+        captureSnapshot (Driver e "/driver") (Map.keys (snapshotEntries captured)) `shouldReturn` captured
     forM_ [Result 1 "" "permission denied", Result 1 "" "not a directory", Result 1 "" "unsupported physical path kind",
            Result 0 "invalid JSON" "", Result 0 "{\"kind\":\"socket\"}" "", Result 0 "{\"kind\":\"symlink\"}" ""] $ \failure ->
       it ("fails instead of recording absence for " ++ show failure) $
@@ -223,11 +212,6 @@ spec = do
     it "propagates file read failures rather than recording missing" $
       withCommands (const (Result 1 "{\"ok\":false,\"error\":\"file read failed\",\"observation\":null}" "")) $ \e ->
         captureSnapshot (Driver e "/driver") ["/file"] `shouldThrow` infrastructure
-    it "checks without changing the expected snapshot" $
-      withCommands (const (snapshotReply [("/file", Missing)])) $ \e -> do
-        let expected = FileSystemSnapshot (Map.singleton "/file" (RegularFile "original"))
-        checkSnapshot (Driver e "/driver") expected `shouldThrow` assertionFailure
-        expected `shouldBe` FileSystemSnapshot (Map.singleton "/file" (RegularFile "original"))
     forM_ [snapshotReply [], snapshotReply [("/path", Missing), ("/path", Missing)],
            snapshotReply [("/unselected", Missing)],
            Result 0 "{\"ok\":true,\"value\":[{\"path\":\"/path\",\"kind\":\"file\",\"data\":[256],\"target\":[]}]}" ""] $ \malformed ->
@@ -384,7 +368,7 @@ spec = do
             `shouldThrow` (\(CallerFailure observed) -> observed == original)
       it ("preserves Hspec failure identity with cleanup failure=" ++ show removalFails) $
         withDaemon False removalFails $ \host _ _ -> withDockerHost host $ do
-          original <- try (expectationFailure "original Hspec failure") :: IO (Either SomeException ())
+          original <- try (Result 7 "actual" "stderr" `shouldBe` Result 0 "expected" "") :: IO (Either SomeException ())
           case original of
             Left err -> do
               result <- try (withEnvironment "local:image" (\_ -> throwIO err)) :: IO (Either SomeException ())
@@ -416,15 +400,13 @@ spec = do
   describe "unsupported backend" $ do
     it "rejects TLS explicitly" $ withEngineHost "https://localhost:2376" (const (pure ())) `shouldThrow` invalidInput
 
-invalidInput, infrastructure, executionFailure, assertionFailure, cleanupFailure :: E2EError -> Bool
+invalidInput, infrastructure, executionFailure, cleanupFailure :: E2EError -> Bool
 invalidInput (InvalidInput _) = True
 invalidInput _ = False
 infrastructure (Infrastructure _) = True
 infrastructure _ = False
 executionFailure (ExecutionFailed _ _) = True
 executionFailure _ = False
-assertionFailure (AssertionFailed _) = True
-assertionFailure _ = False
 cleanupFailure (CleanupFailed _ _) = True
 cleanupFailure _ = False
 partialFailure :: Output -> E2EError -> Bool

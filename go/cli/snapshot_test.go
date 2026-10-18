@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -22,62 +22,52 @@ func TestSnapshot_rejects_invalid_paths_before_execution(t *testing.T) {
 			}
 		})
 	}
-	if _, err := (&Environment{}).CompareSnapshot(FilesystemSnapshot{}); err == nil {
-		t.Fatal("zero snapshot accepted")
-	}
 	if _, err := (&Environment{}).Snapshot([]string{"path"}); err == nil {
 		t.Fatal("snapshot without installed driver accepted")
 	}
 }
 
-func TestSnapshot_compares_bytes_types_targets_and_existence_in_sorted_order(t *testing.T) {
+func TestSnapshot_entries_preserve_bytes_and_sorted_immutable_state(t *testing.T) {
 	container := &snapshotProtocolContainer{entries: []snapshotWireFixture{
-		{Path: "a created", Kind: "missing"},
-		{Path: "b deleted", Kind: "file", Data: []int{0, 255, 10}},
-		{Path: "c content ; $(literal)", Kind: "file", Data: []int{0, 255, 10}},
-		{Path: "d type", Kind: "file"},
-		{Path: "e dangling", Kind: "symlink", Target: []int{'.', '.', '/', 'm', '\n', 255}},
-		{Path: "f directory", Kind: "directory"},
-		{Path: "g missing", Kind: "missing"},
-		{Path: "h file link", Kind: "symlink", Target: []int{'c'}},
+		{Path: "file", Kind: "file", Data: []int{0, 255, 10}},
+		{Path: "dangling", Kind: "symlink", Target: []int{'.', '.', '/', 'm', '\n', 255}},
+		{Path: "directory", Kind: "directory"},
+		{Path: "missing", Kind: "missing"},
 	}}
 	environment := &Environment{ctx: t.Context(), container: container, driverPath: "/driver"}
-	selected := []string{"h file link", "g missing", "f directory", "e dangling", "d type", "c content ; $(literal)", "b deleted", "a created"}
+	selected := []string{"missing", "file", "directory", "dangling"}
 	before, err := environment.Snapshot(selected)
 	if err != nil {
 		t.Fatal(err)
 	}
 	selected[0] = "caller mutation"
-	if err := environment.CheckSnapshot(before); err != nil {
-		t.Fatal(err)
-	}
-	container.entries[0].Kind = "file"
-	container.entries[1].Kind, container.entries[1].Data = "missing", nil
-	container.entries[2].Data[1] = 254
-	container.entries[3].Kind = "directory"
-	container.entries[4].Target = []int{'o', 't', 'h', 'e', 'r'}
-	want := []SnapshotDifference{
-		{Path: "a created", Change: SnapshotExistence, BeforeKind: PathMissing, AfterKind: PathFile},
-		{Path: "b deleted", Change: SnapshotExistence, BeforeKind: PathFile, AfterKind: PathMissing},
-		{Path: "c content ; $(literal)", Change: SnapshotContent, BeforeKind: PathFile, AfterKind: PathFile},
-		{Path: "d type", Change: SnapshotKind, BeforeKind: PathFile, AfterKind: PathDirectory},
-		{Path: "e dangling", Change: SnapshotTarget, BeforeKind: PathSymlink, AfterKind: PathSymlink},
+	want := []SnapshotEntry{
+		{Path: "dangling", Kind: PathSymlink, Target: "../m\n\xff"},
+		{Path: "directory", Kind: PathDirectory},
+		{Path: "file", Kind: PathFile, Content: "\x00\xff\n"},
+		{Path: "missing", Kind: PathMissing},
 	}
 	for range 2 {
-		got, err := environment.CompareSnapshot(before)
-		if err != nil {
-			t.Fatal(err)
+		got := before.Entries()
+		if !slices.Equal(got, want) {
+			t.Fatalf("entries=%#v want=%#v", got, want)
 		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("differences=%+v want=%+v", got, want)
-		}
-		got[0].Path = "caller-mutated-difference"
+		got[0] = SnapshotEntry{Path: "caller mutation"}
 	}
-	if err := environment.CheckSnapshot(before); err == nil || !strings.Contains(err.Error(), "content") {
-		t.Fatalf("err=%v want snapshot mismatch", err)
+	container.entries[0].Data[1] = 254
+	after, err := environment.Snapshot([]string{"missing", "file", "directory", "dangling"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(container.paths, []string{"a created", "b deleted", "c content ; $(literal)", "d type", "e dangling", "f directory", "g missing", "h file link"}) {
-		t.Fatalf("selected paths=%q", container.paths)
+	want[2].Content = "\x00\xfe\n"
+	if got := after.Entries(); !slices.Equal(got, want) {
+		t.Fatalf("entries=%#v want=%#v", got, want)
+	}
+	if got := before.Entries()[2].Content; got != "\x00\xff\n" {
+		t.Fatalf("captured bytes changed: %q", got)
+	}
+	if got := (FilesystemSnapshot{}).Entries(); len(got) != 0 {
+		t.Fatalf("zero snapshot entries=%#v", got)
 	}
 }
 
@@ -103,16 +93,9 @@ func TestSnapshot_rejects_errors_and_malformed_or_unsupported_states(t *testing.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			environment := &Environment{ctx: t.Context(), container: test.container, driverPath: "/driver"}
-			before := FilesystemSnapshot{entries: map[string]snapshotEntry{"path": {kind: PathMissing}}}
-			for _, operation := range []func() error{
-				func() error { _, err := environment.Snapshot([]string{"path"}); return err },
-				func() error { _, err := environment.CompareSnapshot(before); return err },
-				func() error { return environment.CheckSnapshot(before) },
-			} {
-				err := operation()
-				if err == nil || (test.wantCause != nil && !errors.Is(err, test.wantCause)) {
-					t.Fatalf("err=%v wantCause=%v", err, test.wantCause)
-				}
+			_, err := environment.Snapshot([]string{"path"})
+			if err == nil || (test.wantCause != nil && !errors.Is(err, test.wantCause)) {
+				t.Fatalf("err=%v wantCause=%v", err, test.wantCause)
 			}
 		})
 	}

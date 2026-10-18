@@ -6,7 +6,7 @@ Source: [e2e.rs](./e2e.rs)
 
 ### Scope
 
-Verify explicit physical path snapshots and deterministic differences without baseline updates.
+Verify explicit physical path snapshots with native equality and no baseline updates.
 
 ### Commands under test
 
@@ -29,13 +29,13 @@ The test selects the binary for the container's `uname -m` and installs it throu
 2. Capture a baseline and check every state, exact bytes, and literal targets.
 3. Add an unselected directory child and change file permissions, then confirm the baseline still matches.
 4. Mutate content, target, kind, and existence.
-5. Compare fresh state against the original baseline and assert each sorted difference.
+5. Compare the complete fresh snapshot against explicit expected states through native `assert_eq!`.
 6. Reject a FIFO and a path whose parent is a regular file.
 
 ### Expected results
 
-Differences appear in lexical path order with `Content`, `Target`, `Kind`, and `Existence` reasons.
-The baseline's bytes remain unchanged, and `check_snapshot` returns an assertion for the mutations.
+Snapshot entries remain sorted by literal path.
+The baseline's bytes remain unchanged, and native `assert_eq!` checks every expected state after the mutations.
 Unsupported kinds and inspection errors are driver failures, not missing paths.
 
 ### Notes
@@ -68,7 +68,7 @@ Install the matching driver, write valid pretty-printed JSON, and create a link 
 
 ### Expected results
 
-Sorted differences report `Existence`, `Content`, and `Target`, while the empty regular file remains unchanged.
+Native `assert_eq!` verifies the deleted path, changed content, literal link target, and unchanged empty regular file.
 
 ### Notes
 
@@ -303,7 +303,7 @@ Install the matching driver in a fresh environment.
 
 ### Execution flow
 
-1. Expect readiness and return an intentional typed assertion error from the session callback.
+1. Expect readiness and return an intentional typed callback error from the session callback.
 2. Require the original callback-error variant.
 3. Probe the child PID and scan `/tmp` for terminal socket directories.
 
@@ -359,7 +359,7 @@ Use the same PID-recording `sleep infinity` fixture, PID probe, and terminal-dir
 
 ### Arguments and options
 
-The callback panics with a concrete `123_u32` payload after readiness.
+The callback uses native `assert_eq!` to compare a running session with an exited status after readiness.
 
 ### Preconditions and fixtures
 
@@ -373,7 +373,7 @@ Install the matching driver in a fresh environment.
 
 ### Expected results
 
-The payload remains `123_u32`, and cleanup completes before the panic reaches its caller.
+The native assertion payload retains `left: Running` and `right: Exited { code: 7 }`; cleanup completes before the panic reaches its caller.
 
 ### Notes
 
@@ -402,7 +402,7 @@ Build the explicit nonroot image and matching static driver artifacts before thi
 1. Install the helper through the same public API used by root-image tests.
 2. Require a nonzero user ID and capture the absent path.
 3. Create a readable file and accessible directory, snapshot them, then remove read/search permissions with mode `000`.
-4. Require explicit driver errors from `snapshot` for the unreadable file and inaccessible child, and from `check_snapshot` against the readable baseline.
+4. Require explicit driver errors from `snapshot` for the unreadable file, inaccessible child, and recapture of the readable baseline paths.
 5. Run the terminal child and wait for exit.
 
 ### Expected results
@@ -487,7 +487,7 @@ The ignored test calls `with_environment` for its own fresh container.
 1. Run `["sh", "-c", "echo first > /workspace/result.txt"]`.
 2. Run `["sh", "-c", "echo second >> /workspace/result.txt"]` in the same environment.
 3. Run `["cat", "/workspace/result.txt"]` and compare exact stdout.
-4. Check the file bytes with `check_file("/workspace/result.txt", b"first\nsecond\n")`.
+4. Compare `read_file("/workspace/result.txt").await?` with `b"first\nsecond\n"` through native `assert_eq!`.
 5. Write bytes `[0, 255, 10]` to `/workspace/binary` and check those exact bytes.
 6. Run `["stat", "-c", "%a", "/workspace/binary"]` and compare stdout with exactly `644\n`.
 7. Await scoped cleanup.
@@ -571,7 +571,7 @@ The ignored native test invokes `with_environment` directly.
 ### Execution flow
 
 1. Build literal argv `["sh", "-c", "printf '%s:%s\\n' \"$HOME\" \"$PWD\"; printf 'diagnostic\\n' >&2; exit 7"]`, set the working directory and environment entry.
-2. Await `check_command` and compare every command-result field.
+2. Await `run` and use native `assert_eq!` to compare the complete command result.
 3. Await scoped cleanup.
 
 ### Expected results
@@ -591,12 +591,14 @@ Verify physical file and directory checks, missing paths, literal symlink target
 
 ### Commands under test
 
-| Command path | Purpose                                              |
-| ------------ | ---------------------------------------------------- |
-| `mkdir`      | Create a physical directory.                         |
-| `ln`         | Create literal relative-target symlinks.             |
-| `test`       | Used by the environment's physical-path assertions.  |
-| `readlink`   | Used by the environment's literal symlink assertion. |
+| Command path | Purpose                                                |
+| ------------ | ------------------------------------------------------ |
+| `mkdir`      | Create a physical directory.                           |
+| `ln`         | Create literal relative-target symlinks.               |
+| `mkfifo`     | Create an unsupported physical kind.                   |
+| `sh`         | Create a link whose target contains non-UTF-8 bytes.   |
+| `test`       | Used by the environment's physical-path observations.  |
+| `readlink`   | Used by the environment's literal symlink observation. |
 
 ### Arguments and options
 
@@ -617,16 +619,17 @@ The ignored test creates all fixtures in its own `with_environment` callback.
 1. Write `/workspace/result.txt` with exact bytes `fixture\n`.
 2. Run `["mkdir", "/workspace/directory"]`.
 3. Run `["ln", "-s", "result.txt", "/workspace/link"]`, `["ln", "-s", "missing.txt", "/workspace/dangling"]`, and `["ln", "-s", "directory", "/workspace/directory-link"]` in order.
-4. Check physical file, physical directory, missing `/workspace/missing.txt`, and literal `result.txt` and `missing.txt` symlink targets.
-5. Assert errors when treating the dangling link as missing, the file link as a physical regular file, and the directory link as a physical directory.
-6. Assert a literal-target mismatch for `/workspace/link` versus `/workspace/result.txt`.
+4. Compare `path_kind` results with native `assert_eq!`: regular file, directory, missing path, and symbolic links, including dangling links.
+5. Compare literal target bytes from `read_symlink`, including targets with trailing newlines and non-UTF-8 bytes.
+6. Create a FIFO and require `PathKind::Other`; require execution errors when reading a regular file or missing path as a link.
 7. Await scoped cleanup.
 
 ### Expected results
 
 Fixture commands exit `0` with both streams empty.
-The physical and literal-target assertions succeed only for their stated paths and targets.
-Each deliberately invalid physical or literal-target assertion returns `Error::Assertion`.
+Native equality checks report physical kinds and exact literal-target bytes.
+Missing and non-link paths return execution errors from `read_symlink`.
+No driver is installed for these observations.
 The test writes the fixture bytes but does not independently read them back in this scenario.
 
 ### Notes
@@ -683,9 +686,9 @@ Verify two independent scoped environments have distinct container identities, n
 
 ### Commands under test
 
-| Command path | Purpose                                                      |
-| ------------ | ------------------------------------------------------------ |
-| `test`       | Used by `check_missing` to establish fresh filesystem state. |
+| Command path | Purpose                                                  |
+| ------------ | -------------------------------------------------------- |
+| `test`       | Used by `path_kind` to establish fresh filesystem state. |
 
 ### Arguments and options
 
@@ -751,7 +754,7 @@ The test owns one fresh container.
 1. Run `["mkdir", "--", "/workspace/a 'quoted' $(literal)"]` and require a zero exit with empty streams.
 2. Set the working directory to that literal path.
 3. Run `["printf", "<%s>\n", "", "two words", "$(touch /workspace/injected)", "'literal'"]`.
-4. Compare every result field, then call `check_missing("/workspace/injected")`.
+4. Compare every result field, then compare `path_kind("/workspace/injected")` with `PathKind::Missing`.
 
 ### Expected results
 
@@ -802,16 +805,16 @@ This case covers successful removal after a caller error, not a daemon cleanup f
 
 ### Scope
 
-Verify that callback unwinding preserves its original typed panic payload after cleanup.
+Verify that callback unwinding preserves the native `assert_eq!` panic payload after cleanup.
 
 ### Commands under test
 
-No application command is executed.
+`printf actual` produces the observed command result.
 The test observes the panic payload and Docker container inspection.
 
 ### Arguments and options
 
-The callback panics with the value `123_u32`.
+The callback compares the actual command result against an intentionally different `CommandResult`.
 A Tokio oneshot channel carries the exact container ID to the test.
 
 ### Preconditions and fixtures
@@ -822,13 +825,13 @@ The native test catches the scope panic with `FutureExt::catch_unwind`.
 ### Execution flow
 
 1. Enter the callback and send its container ID through the channel.
-2. Call `std::panic::panic_any(123_u32)`.
-3. Await the caught scope result and downcast its panic payload to `u32`.
+2. Run `printf actual` and compare the complete result with an intentionally different exit code and streams through `assert_eq!`.
+3. Await the caught scope result and inspect its native assertion message.
 4. Inspect the recorded container ID using Testcontainers' configured client.
 
 ### Expected results
 
-The original panic payload is exactly `123_u32`.
+The original assertion message retains left and right `CommandResult` values, exit codes, stdout, and stderr.
 Container inspection returns Docker 404 before the test completes.
 
 ### Notes

@@ -4,16 +4,18 @@ use caseyard::{Command, CommandResult, Error, ScopeError, with_environment};
 #[ignore = "requires caller-built example-cli:local and a Linux-container Docker Engine"]
 async fn prints_greeting_scenario() -> Result<(), ScopeError<Error>> {
     with_environment("example-cli:local", |environment| async move {
-        environment
-            .check_command(
-                Command::new(["echo", "hello from e2e"]),
-                CommandResult {
-                    exit_code: 0,
-                    stdout: b"hello from e2e\n".to_vec(),
-                    stderr: Vec::new(),
-                },
-            )
-            .await
+        let actual = environment
+            .run(Command::new(["echo", "hello from e2e"]))
+            .await?;
+        assert_eq!(
+            actual,
+            CommandResult {
+                exit_code: 0,
+                stdout: b"hello from e2e\n".to_vec(),
+                stderr: Vec::new(),
+            }
+        );
+        Ok(())
     })
     .await
 }
@@ -22,16 +24,16 @@ async fn prints_greeting_scenario() -> Result<(), ScopeError<Error>> {
 #[ignore = "requires caller-built example-cli:local and a Linux-container Docker Engine"]
 async fn returns_expected_failure_scenario() -> Result<(), ScopeError<Error>> {
     with_environment("example-cli:local", |environment| async move {
-        environment
-            .check_command(
-                Command::new(["false"]),
-                CommandResult {
-                    exit_code: 1,
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                },
-            )
-            .await
+        let actual = environment.run(Command::new(["false"])).await?;
+        assert_eq!(
+            actual,
+            CommandResult {
+                exit_code: 1,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            }
+        );
+        Ok(())
     })
     .await
 }

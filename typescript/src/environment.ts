@@ -7,7 +7,9 @@ import type { StartedTestContainer } from 'testcontainers'
 import { untilCancelled } from './cancellation.js'
 import { registerDriverWriter, registerDriverCleanup } from './driver.js'
 import { DockerError, dockerFailure } from './errors.js'
-import { captureSnapshot, compareSnapshots, type FilesystemSnapshot } from './snapshot.js'
+import { captureSnapshot, type FilesystemSnapshot } from './snapshot.js'
+
+export type PathKind = 'missing' | 'file' | 'directory' | 'symlink' | 'other'
 
 export interface Command {
   args: readonly string[]
@@ -53,16 +55,11 @@ export function validateCommand(command: Command): void {
 export interface Environment {
   readonly signal: AbortSignal
   run(command: Command): Promise<Result>
-  checkCommand(command: Command, expected: Result): Promise<void>
   writeFile(path: string, bytes: Uint8Array): Promise<void>
   readFile(path: string): Promise<Buffer>
-  checkFile(path: string, expected: Uint8Array): Promise<void>
-  checkMissing(path: string): Promise<void>
-  checkRegularFile(path: string): Promise<void>
-  checkDirectory(path: string): Promise<void>
-  checkSymlink(path: string, literalTarget: string): Promise<void>
+  pathKind(path: string): Promise<PathKind>
+  readSymlink(path: string): Promise<string>
   snapshot(paths: readonly string[]): Promise<FilesystemSnapshot>
-  checkSnapshot(expected: FilesystemSnapshot): Promise<void>
 }
 
 export class DockerEnvironment implements Environment {
@@ -79,12 +76,6 @@ export class DockerEnvironment implements Environment {
   async snapshot(paths: readonly string[]): Promise<FilesystemSnapshot> {
     this.signal.throwIfAborted()
     return captureSnapshot(this, paths)
-  }
-
-  async checkSnapshot(expected: FilesystemSnapshot): Promise<void> {
-    const actual = await this.snapshot(expected.entries.map(({ path }) => path))
-    const differences = compareSnapshots(expected, actual)
-    if (differences.length) throw new Error(`Filesystem snapshot mismatch: ${JSON.stringify(differences)}`)
   }
 
   async run(command: Command): Promise<Result> {
@@ -118,17 +109,6 @@ export class DockerEnvironment implements Environment {
         { stdout: '', stderr: '' },
         signal.aborted ? signal.reason : cause instanceof DockerError ? cause : dockerFailure(cause),
       )
-    }
-  }
-
-  async checkCommand(command: Command, expected: Result): Promise<void> {
-    const actual = await this.run(command)
-    if (
-      actual.exitCode !== expected.exitCode ||
-      actual.stdout !== expected.stdout ||
-      actual.stderr !== expected.stderr
-    ) {
-      throw new Error(`Command result mismatch: actual=${JSON.stringify(actual)} expected=${JSON.stringify(expected)}`)
     }
   }
 
@@ -194,10 +174,6 @@ export class DockerEnvironment implements Environment {
     }
   }
 
-  async checkFile(path: string, expected: Uint8Array): Promise<void> {
-    if (!(await this.readFile(path)).equals(Buffer.from(expected))) throw new Error(`File bytes mismatch: ${path}`)
-  }
-
   private async probe(flag: string, path: string): Promise<boolean> {
     pathValue(path)
     const result = await this.run({ args: ['test', flag, path] })
@@ -206,26 +182,19 @@ export class DockerEnvironment implements Environment {
     return result.exitCode === 0
   }
 
-  async checkMissing(path: string): Promise<void> {
-    if ((await this.probe('-e', path)) || (await this.probe('-L', path)))
-      throw new Error(`Expected missing path: ${path}`)
+  async pathKind(path: string): Promise<PathKind> {
+    if (await this.probe('-L', path)) return 'symlink'
+    if (await this.probe('-f', path)) return 'file'
+    if (await this.probe('-d', path)) return 'directory'
+    if (!(await this.probe('-e', path))) return 'missing'
+    return 'other'
   }
-  private async physical(flag: string, path: string): Promise<void> {
-    if (!(await this.probe(flag, path)) || (await this.probe('-L', path)))
-      throw new Error(`Expected physical ${flag} path: ${path}`)
-  }
-  async checkRegularFile(path: string): Promise<void> {
-    await this.physical('-f', path)
-  }
-  async checkDirectory(path: string): Promise<void> {
-    await this.physical('-d', path)
-  }
-  async checkSymlink(path: string, literalTarget: string): Promise<void> {
-    text(literalTarget, 'Symbolic link target')
-    if (!(await this.probe('-L', path))) throw new Error(`Expected symbolic link: ${path}`)
-    await this.checkCommand(
-      { args: ['readlink', '--', path] },
-      { exitCode: 0, stdout: `${literalTarget}\n`, stderr: '' },
-    )
+
+  async readSymlink(path: string): Promise<string> {
+    pathValue(path)
+    const result = await this.run({ args: ['readlink', '--', path] })
+    if (result.exitCode !== 0 || result.stderr !== '' || !result.stdout.endsWith('\n'))
+      throw new DockerError(`Symbolic link read failed: ${JSON.stringify(result)}`)
+    return result.stdout.slice(0, -1)
   }
 }

@@ -6,7 +6,7 @@
 module Test.CLI.E2E.Internal where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception hiding (AssertionFailed)
+import Control.Exception
 import Control.Monad (unless, when)
 import Data.Aeson hiding (Result)
 import Data.Aeson.Types (Parser, parseEither)
@@ -35,7 +35,6 @@ data E2EError
   | Infrastructure String
   | DeadlineExceeded Output
   | ExecutionFailed SomeException Output
-  | AssertionFailed String
   | CleanupFailed SomeException (Maybe SomeException)
   deriving (Show, Typeable)
 instance Exception E2EError

@@ -20,7 +20,8 @@ For installation, public API behavior, and consumer requirements, use the [root 
 
 | Document                                     | Canonical content                                                                                         |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| [Root README](./README.md)                   | Purpose, language-independent public contract, implementation status, and links to language guides.       |
+| [Root README](./README.md)                   | Purpose, language-independent public contract, and links to language guides.                              |
+| [Driver setup](./docs/driver.md)             | Optional snapshot/terminal prerequisites, trusted cross-build procedure, and installation routes.         |
 | Language READMEs                             | Consumer installation, language-specific public APIs, limitations, and links to relevant examples.        |
 | Example sources and sibling Markdown         | Concrete usage and the behavior each example actually verifies.                                           |
 | [cli-e2e](./.agents/skills/cli-e2e/SKILL.md) | Language-independent scenario design, implementation, and documentation guidance, with links to examples. |
@@ -52,7 +53,6 @@ Keep documentation examples limited to test source files and their sibling scena
 Do not add package manifests, lockfiles, runner entrypoints, standalone tool configuration, or root task dependencies for them.
 Show normal published-package setup in the language READMEs, not checkout-relative dependency overrides.
 When manual execution is useful, integrate the source into an existing consumer test project.
-Registry consumption remains unverified until the required packages are published.
 Keep `minimumReleaseAge: 1440` and `minimumReleaseAgeStrict: true` without bypasses.
 Keep the Vite+ catalog, Vite alias, and bundled Vitest override aligned with the template.
 Do not deny Vite+ lifecycle scripts through a package-specific override without evidence.
@@ -142,7 +142,9 @@ Each language must verify these public behaviors against the shared image:
 | Terminal session | Output-driven input, separate stdout, pipe input, resize, signals, raw output, and scope cleanup.         |
 
 Also verify isolation between scopes, owned-container cleanup, and preservation of the caller's image.
-Keep assertions inside standard test bodies; extract only shared lifecycle, fixtures, or assertions.
+Keep assertions inside standard test bodies and use the framework's equality, diff, and snapshot facilities.
+Caseyard returns command, path, file, and snapshot observations instead of implementing verdicts or snapshot persistence.
+Extract only shared lifecycle and fixtures.
 Use controlled native tests for invalid inputs, transport failures, partial output, comparison failures, cleanup failures, and cancellation.
 
 ## Implementation constraints
