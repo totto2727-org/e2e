@@ -3,16 +3,11 @@
 
   inputs = {
     nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1";
-    vite-plus-overlay = {
-      url = "github:ryoppippi/nix-vite-plus";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
     {
       nixpkgs,
-      vite-plus-overlay,
       ...
     }:
     let
@@ -29,7 +24,6 @@
         let
           pkgs = import nixpkgs {
             inherit system;
-            overlays = [ vite-plus-overlay.overlays.default ];
           };
           common = [
             pkgs.just
@@ -38,11 +32,6 @@
           goTools = [
             pkgs.go
             pkgs.golangci-lint
-          ];
-          typescriptTools = [
-            pkgs.nodejs_24
-            pkgs.pnpm
-            pkgs.vite-plus
           ];
           rustTools = [ pkgs.rustup ];
           haskellTools = [
@@ -55,10 +44,20 @@
         in
         {
           default = pkgs.mkShell {
-            packages = common ++ goTools ++ typescriptTools ++ rustTools ++ haskellTools;
+            packages = common ++ goTools ++ rustTools ++ haskellTools;
+            shellHook = ''
+              # Enable Git Hook
+              vp config
+            '';
           };
           go = pkgs.mkShell { packages = common ++ goTools; };
-          typescript = pkgs.mkShell { packages = common ++ typescriptTools; };
+          typescript = pkgs.mkShell {
+            packages = common;
+            shellHook = ''
+              # Enable Git Hook
+              vp config
+            '';
+          };
           rust = pkgs.mkShell { packages = common ++ rustTools; };
           haskell = pkgs.mkShell { packages = common ++ haskellTools; };
         }
