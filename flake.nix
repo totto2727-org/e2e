@@ -42,7 +42,10 @@
             pkgs.pkg-config
           ];
         in
-        {
+        rec {
+          ci = default.overrideAttrs (_: {
+            shellHook = "";
+          });
           default = pkgs.mkShell {
             packages = common ++ goTools ++ rustTools ++ haskellTools;
             shellHook = ''
