@@ -14,8 +14,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
       - uses: totto2727-org/monorepo/.github/actions/setup-typescript@main
+      - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
       - name: Build npm package
         working-directory: typescript
         run: |
