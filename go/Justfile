@@ -1,7 +1,9 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+mod build 'build.just'
+
 default:
-    @just --list
+    @just --list --list-submodules
 
 fix:
     golangci-lint fmt
@@ -11,18 +13,6 @@ check:
     golangci-lint fmt --diff
     golangci-lint run --build-tags=e2e ./...
     go test -race -tags=e2e -run '^$' ./e2e
-
-build:
-    go build ./...
-
-# Build caller-owned Linux executables without a C runtime dependency.
-build-driver:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p target
-    for arch in amd64 arm64; do
-        CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "target/driver-linux-$arch" ./cmd/caseyard-driver
-    done
 
 test:
     go test -race ./...
@@ -37,4 +27,4 @@ e2e:
     remaining=$(docker ps --all --filter "ancestor=$image_id" --format '{{{{.ID}}')
     test -z "$remaining"
 
-ci: check build test
+ci: check build::all test

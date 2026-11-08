@@ -17,14 +17,14 @@ const cache = {
 export default defineConfig({
   run: {
     tasks: {
-      'check:rustfmt': { command: 'just check-rustfmt', cache: true },
+      'check:rustfmt': { command: 'just check::rustfmt', cache: true },
       'check:clippy': {
-        command: 'just check-clippy',
+        command: 'just check::clippy',
         dependsOn: ['check:rustfmt'],
         cache,
       },
-      'fix:rustfmt': { command: 'just fix-rustfmt', cache: true },
-      'fix:clippy': { command: 'just fix-clippy', dependsOn: ['fix:rustfmt'], cache },
+      'fix:rustfmt': { command: 'just fix::rustfmt', cache: true },
+      'fix:clippy': { command: 'just fix::clippy', dependsOn: ['fix:rustfmt'], cache },
       // Cargo tasks share target/, including cache restoration. Keep them ordered.
       build: {
         command: 'just build',
