@@ -1,11 +1,6 @@
-import { generateIgnorePatterns } from '@totto2727/gitignore-patterns'
 import { defineConfig } from 'vite-plus'
 
-const ignorePatterns = await generateIgnorePatterns(new URL('.', import.meta.url))
-
 export default defineConfig({
-  fmt: { ignorePatterns },
-  lint: { ignorePatterns },
   test: {
     project: ['native'],
     projects: [

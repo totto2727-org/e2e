@@ -52,9 +52,6 @@ importers:
         specifier: ^12.2.1
         version: 12.2.1
     devDependencies:
-      '@totto2727/gitignore-patterns':
-        specifier: ^0.1.0
-        version: 0.1.0
       '@tsconfig/node-ts':
         specifier: ^23.6.4
         version: 23.6.4
