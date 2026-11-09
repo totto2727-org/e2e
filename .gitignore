@@ -9,5 +9,4 @@ typescript/dist/
 **/dist-newstyle/
 **/target/
 .vite/
-**/.vite/
 *.tgz
