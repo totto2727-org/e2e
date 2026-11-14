@@ -15,17 +15,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
+        with:
+          dev-shell: ci
       - uses: totto2727-org/monorepo/.github/actions/setup-typescript@main
       - name: Build npm package
         working-directory: typescript
         run: |
-          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#default")"
+          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#ci")"
           vp run build
       - uses: totto2727-org/monorepo/.github/actions/publish-npm@main
         with:
+          dev-shell: ci
           working-directory: typescript
       - uses: totto2727-org/monorepo/.github/actions/publish-crate@main
         with:
+          dev-shell: ci
           working-directory: rust
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
