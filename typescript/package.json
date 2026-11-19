@@ -1,6 +1,6 @@
 {
   "name": "@totto2727/caseyard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Isolated Linux-container CLI E2E helpers",
   "license": "MIT",
   "repository": {
