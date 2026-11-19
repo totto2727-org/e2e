@@ -15,7 +15,7 @@ import {
   withEnvironment,
   type Command,
   type Environment,
-} from '../src/index.js'
+} from '../../src/index.js'
 
 const backend = vi.hoisted(() => {
   const container = {

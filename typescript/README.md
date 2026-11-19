@@ -98,7 +98,7 @@ Its string decoding does not guarantee strict UTF-8 validation or preservation a
 
 ## Filesystem snapshots
 
-See the [shared snapshot contract](../README.md#file-state-snapshots), [driver setup](../README.md#static-driver-for-snapshots-and-terminals), and the [snapshot example](./test/docker.test.ts#L173).
+See the [shared snapshot contract](../README.md#file-state-snapshots), [driver setup](../README.md#static-driver-for-snapshots-and-terminals), and the [snapshot example](./test/docker/docker.test.ts#L173).
 Functions and types below are exported from `@totto2727/caseyard`.
 
 | API or value                                                                     | TypeScript contract                                                                                                                                                                                                 |
@@ -116,7 +116,7 @@ The library never stores or updates baselines.
 
 ## Terminal sessions
 
-See the [shared terminal contract](../README.md#terminal-sessions) and the [terminal example](./test/docker.test.ts#L284).
+See the [shared terminal contract](../README.md#terminal-sessions) and the [terminal example](./test/docker/docker.test.ts#L284).
 `withTerminal` and the types below are exported from `@totto2727/caseyard`.
 Session methods belong to `TerminalSession`.
 

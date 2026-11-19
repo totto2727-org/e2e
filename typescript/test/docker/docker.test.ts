@@ -11,7 +11,7 @@ import {
   type TerminalSession,
   withEnvironment,
   type Environment,
-} from '../src/index.js'
+} from '../../src/index.js'
 
 const image = 'e2e-example:local'
 const execute = promisify(execFile)
@@ -52,7 +52,7 @@ async function installFixtureDriver(env: Environment): Promise<void> {
   expect(machine.exitCode).toBe(0)
   const architecture = machine.stdout.trim() === 'aarch64' ? 'arm64' : 'amd64'
   expect(['aarch64', 'x86_64']).toContain(machine.stdout.trim())
-  await installDriver(env, await readFile(new URL(`../../go/target/driver-linux-${architecture}`, import.meta.url)))
+  await installDriver(env, await readFile(new URL(`../../../go/target/driver-linux-${architecture}`, import.meta.url)))
 }
 
 const empty = { exitCode: 0, stdout: '', stderr: '' }
