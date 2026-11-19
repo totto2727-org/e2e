@@ -5,5 +5,6 @@
     "module": "NodeNext",
     "noEmit": true,
     "types": ["node"]
-  }
+  },
+  "include": ["*.ts", "*.tsx", "*/*.ts", "typescript/src/**/*.ts", "typescript/test/**/*.ts"]
 }

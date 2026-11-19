@@ -4,9 +4,9 @@ export default defineConfig({
   test: {
     project: ['native'],
     projects: [
-      { test: { name: 'native', include: ['test/native.test.ts'] } },
-      { test: { name: 'package', include: ['test/package.test.mjs'] } },
-      { test: { name: 'docker', include: ['test/docker.test.ts'], testTimeout: 125_000 } },
+      { test: { name: 'native', dir: 'test/native' } },
+      { test: { name: 'package', dir: 'test/package' } },
+      { test: { name: 'docker', dir: 'test/docker', testTimeout: 125_000 } },
     ],
   },
   pack: {
