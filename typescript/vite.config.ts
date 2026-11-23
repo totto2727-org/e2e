@@ -1,6 +1,17 @@
+import { fileURLToPath } from 'node:url'
+
 import { defineConfig } from 'vite-plus'
 
 export default defineConfig({
+  lint: {
+    jsPlugins: [fileURLToPath(import.meta.resolve('@totto2727/oxlint'))],
+    rules: {
+      'rules/no-eslint-disable-comments': 'error',
+      'rules/no-jsx-script-tag': 'error',
+      'rules/require-disable-reason': 'error',
+      'rules/require-import-extension': 'error',
+    },
+  },
   test: {
     project: ['native'],
     projects: [

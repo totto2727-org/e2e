@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url'
+
 import { generateIgnorePatterns } from '@totto2727/gitignore-patterns'
 import { defineConfig } from 'vite-plus'
 
@@ -16,12 +18,15 @@ export default defineConfig({
     ignorePatterns,
   },
   lint: {
+    ignorePatterns,
+    jsPlugins: [fileURLToPath(import.meta.resolve('@totto2727/oxlint'))],
     options: { typeAware: true, typeCheck: true },
-    ignorePatterns: [
-      ...ignorePatterns,
-      // This documentation snippet uses dependencies supplied by the consumer's project.
-      '.agents/skills/cli-e2e/references/example/typescript/**',
-    ],
+    rules: {
+      'rules/no-eslint-disable-comments': 'error',
+      'rules/no-jsx-script-tag': 'error',
+      'rules/require-disable-reason': 'error',
+      'rules/require-import-extension': 'error',
+    },
   },
   run: {
     tasks: {
