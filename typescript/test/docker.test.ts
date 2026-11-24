@@ -2,60 +2,56 @@ import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
-import { afterAll, beforeAll, expect, test } from 'vitest'
+import { afterAll, beforeAll, expect as expectFixture, test } from 'vitest'
 
-import {
-  DeadlineError,
-  installDriver,
-  withTerminal,
-  type TerminalSession,
-  withEnvironment,
-  type Environment,
-} from '../src/index.js'
+import { DeadlineError, installDriver, withTerminal, withEnvironment } from '../src/index.ts'
+import type { TerminalSession, Environment } from '../src/index.ts'
 
 const image = 'e2e-example:local'
+// oxlint-disable-next-line typescript/strict-void-return -- Node's execFile returns a ChildProcess as well as taking a callback.
 const execute = promisify(execFile)
-async function docker(...args: string[]): Promise<string> {
-  return (await execute('docker', args, { timeout: 30_000 })).stdout.trim()
+const docker = async (...args: string[]): Promise<string> => {
+  const { stdout } = await execute('docker', args, { timeout: 30_000 })
+  return stdout.trim()
 }
-const identities: string[] = []
-let imageID = ''
-let baseline: string[] = []
 
-async function containers(): Promise<string[]> {
+const identities: string[] = []
+const fixture = { baseline: new Array<string>(), imageID: '' }
+
+const containers = async (): Promise<string[]> => {
   const output = await docker('ps', '-aq', '--no-trunc', '--filter', 'label=org.totto2727.e2e.owner')
-  return output ? output.split('\n').sort() : []
+  return output ? output.split('\n').toSorted() : []
 }
 beforeAll(async () => {
-  baseline = await containers()
-  imageID = await docker('image', 'inspect', '--format', '{{.Id}}', image)
+  fixture.baseline = await containers()
+  fixture.imageID = await docker('image', 'inspect', '--format', '{{.Id}}', image)
 }, 30_000)
 afterAll(async () => {
-  expect(identities.length).toBeGreaterThan(0)
-  expect(new Set(identities).size).toBe(identities.length)
-  expect(await containers()).toEqual(baseline)
-  expect(await docker('image', 'inspect', '--format', '{{.Id}}', image)).toBe(imageID)
+  expectFixture(identities.length).toBeGreaterThan(0)
+  expectFixture(new Set(identities).size).toBe(identities.length)
+  expectFixture(await containers()).toEqual(fixture.baseline)
+  expectFixture(await docker('image', 'inspect', '--format', '{{.Id}}', image)).toBe(fixture.imageID)
 }, 30_000)
 
-async function checkIdentity(env: Environment, expectedImageID = imageID): Promise<void> {
+const checkIdentity = async (env: Environment, expectedImageID = fixture.imageID): Promise<void> => {
   const hostname = await env.run({ args: ['hostname'] })
-  expect(hostname.exitCode).toBe(0)
-  expect(hostname.stderr).toBe('')
+  expectFixture(hostname.exitCode).toBe(0)
+  expectFixture(hostname.stderr).toBe('')
   const id = hostname.stdout.trim()
-  expect(id).toMatch(/^[a-f0-9]{12}$/)
+  expectFixture(id).toMatch(/^[a-f0-9]{12}$/u)
   identities.push(id)
-  expect(await docker('inspect', '--format', '{{.Image}}', id)).toBe(expectedImageID)
+  expectFixture(await docker('inspect', '--format', '{{.Image}}', id)).toBe(expectedImageID)
 }
 
-async function installFixtureDriver(env: Environment): Promise<void> {
+const installFixtureDriver = async (env: Environment): Promise<void> => {
   const machine = await env.run({ args: ['uname', '-m'] })
-  expect(machine.exitCode).toBe(0)
+  expectFixture(machine.exitCode).toBe(0)
   const architecture = machine.stdout.trim() === 'aarch64' ? 'arm64' : 'amd64'
-  expect(['aarch64', 'x86_64']).toContain(machine.stdout.trim())
+  expectFixture(['aarch64', 'x86_64']).toContain(machine.stdout.trim())
   await installDriver(env, await readFile(new URL(`../../go/target/driver-linux-${architecture}`, import.meta.url)))
 }
 
-const empty = { exitCode: 0, stdout: '', stderr: '' }
+const empty = { exitCode: 0, stderr: '', stdout: '' }
 
 test.concurrent('greeting', async ({ expect, signal }) => {
   await withEnvironment(
@@ -64,8 +60,8 @@ test.concurrent('greeting', async ({ expect, signal }) => {
       await checkIdentity(env)
       expect(await env.run({ args: ['echo', 'hello from e2e'] })).toEqual({
         exitCode: 0,
-        stdout: 'hello from e2e\n',
         stderr: '',
+        stdout: 'hello from e2e\n',
       })
     },
     signal,
@@ -97,8 +93,8 @@ test.concurrent('expected failure', async ({ expect, signal }) => {
       await checkIdentity(env)
       expect(await env.run({ args: ['sh', '-c', 'echo expected-failure; exit 7'] })).toEqual({
         exitCode: 7,
-        stdout: 'expected-failure\n',
         stderr: '',
+        stdout: 'expected-failure\n',
       })
     },
     signal,
@@ -113,10 +109,10 @@ test.concurrent('separate streams', async ({ expect, signal }) => {
       expect(
         await env.run({
           args: ['sh', '-c', 'printf "%s:%s\\n" "$HOME" "$PWD"; printf "diagnostic\\n" >&2; exit 7'],
-          workingDir: '/workspace',
           env: ['HOME=/workspace/synthetic-home'],
+          workingDir: '/workspace',
         }),
-      ).toEqual({ exitCode: 7, stdout: '/workspace/synthetic-home:/workspace\n', stderr: 'diagnostic\n' })
+      ).toEqual({ exitCode: 7, stderr: 'diagnostic\n', stdout: '/workspace/synthetic-home:/workspace\n' })
     },
     signal,
   )
@@ -133,8 +129,10 @@ test.concurrent('physical paths', async ({ expect, signal }) => {
         ['ln', '-s', 'result.txt', '/workspace/link'],
         ['ln', '-s', 'missing.txt', '/workspace/dangling'],
         ['ln', '-s', 'directory', '/workspace/directory-link'],
-      ])
+      ]) {
+        // oxlint-disable-next-line no-await-in-loop -- These fixture commands depend on earlier filesystem changes.
         expect(await env.run({ args })).toEqual(empty)
+      }
       expect(await env.pathKind('/workspace/result.txt')).toBe('file')
       expect(await env.pathKind('/workspace/directory')).toBe('directory')
       expect(await env.pathKind('/workspace/missing.txt')).toBe('missing')
@@ -159,9 +157,9 @@ test.concurrent('deadline', async ({ expect, signal }) => {
       async (env) => {
         await checkIdentity(env)
         await expect(env.run({ args: ['sleep', 'infinity'] })).rejects.toMatchObject({
-          name: 'ExecutionError',
           cause: new DeadlineError(),
-          partialResult: { stdout: '', stderr: '' },
+          name: 'ExecutionError',
+          partialResult: { stderr: '', stdout: '' },
         })
         expect(Date.now() - started).toBeLessThan(70_000)
       },
@@ -195,7 +193,7 @@ test.concurrent('filesystem snapshots preserve physical kinds and save sorted ch
       ]
       const before = await env.snapshot(paths)
       expect(before.entries).toEqual([
-        { path: '/workspace/binary', state: { kind: 'file', bytes: Buffer.from([0, 255, 10, 13]) } },
+        { path: '/workspace/binary', state: { bytes: Buffer.from([0, 255, 10, 13]), kind: 'file' } },
         { path: '/workspace/dangling', state: { kind: 'symlink', target: Buffer.from('missing') } },
         { path: '/workspace/directory', state: { kind: 'directory' } },
         { path: '/workspace/link', state: { kind: 'symlink', target: Buffer.from('binary') } },
@@ -218,7 +216,7 @@ test.concurrent('filesystem snapshots preserve physical kinds and save sorted ch
       expect(await env.snapshot(paths)).toMatchSnapshot('changed physical state')
       expect(before.entries[0]).toEqual({
         path: '/workspace/binary',
-        state: { kind: 'file', bytes: Buffer.from([0, 255, 10, 13]) },
+        state: { bytes: Buffer.from([0, 255, 10, 13]), kind: 'file' },
       })
     },
     signal,
@@ -239,10 +237,11 @@ test.concurrent('filesystem snapshots detect JSON whitespace bytes and deletion 
       const before = await env.snapshot([path])
       await env.writeFile(path, Buffer.from('{ "value": 1 }\n\n'))
       const changed = await env.snapshot([path])
-      expect(changed.entries).toEqual([{ path, state: { kind: 'file', bytes: Buffer.from('{ "value": 1 }\n\n') } }])
+      expect(changed.entries).toEqual([{ path, state: { bytes: Buffer.from('{ "value": 1 }\n\n'), kind: 'file' } }])
       expect(await env.run({ args: ['rm', path] })).toEqual(empty)
-      expect((await env.snapshot([path])).entries).toEqual([{ path, state: { kind: 'missing' } }])
-      expect(before.entries).toEqual([{ path, state: { kind: 'file', bytes: Buffer.from('{"value":1}\n') } }])
+      const observedSnapshot = await env.snapshot([path])
+      expect(observedSnapshot.entries).toEqual([{ path, state: { kind: 'missing' } }])
+      expect(before.entries).toEqual([{ path, state: { bytes: Buffer.from('{"value":1}\n'), kind: 'file' } }])
     },
     signal,
   )
@@ -258,9 +257,9 @@ test.concurrent('filesystem snapshots reject special files and non-directory pat
       await checkIdentity(env)
       await installFixtureDriver(env)
       expect(await env.run({ args: ['mkfifo', '/workspace/fifo'] })).toEqual(empty)
-      await expect(env.snapshot(['/workspace/fifo'])).rejects.toThrow(/unsupported/i)
+      await expect(env.snapshot(['/workspace/fifo'])).rejects.toThrow(/unsupported/iu)
       await env.writeFile('/workspace/file', Buffer.from('file'))
-      await expect(env.snapshot(['/workspace/file/child'])).rejects.toThrow(/not a directory/i)
+      await expect(env.snapshot(['/workspace/file/child'])).rejects.toThrow(/not a directory/iu)
     },
     signal,
   )
@@ -273,7 +272,8 @@ test.concurrent('filesystem snapshots preserve arbitrary literal link target byt
       await checkIdentity(env)
       await installFixtureDriver(env)
       expect(await env.run({ args: ['sh', '-c', 'ln -s "$(printf "\\377")" /workspace/raw-link'] })).toEqual(empty)
-      expect((await env.snapshot(['/workspace/raw-link'])).entries).toEqual([
+      const observedSnapshot = await env.snapshot(['/workspace/raw-link'])
+      expect(observedSnapshot.entries).toEqual([
         { path: '/workspace/raw-link', state: { kind: 'symlink', target: Buffer.from([255]) } },
       ])
     },
@@ -297,15 +297,15 @@ test.concurrent('terminal keeps raw stdout separate and observes restored termio
           `saved=$(stty -g < /dev/tty); stty -echo -icanon -isig -opost min 1 time 0 < /dev/tty; printf '\\033[?1049hready' >&2; dd bs=1 count=1 2>/dev/null | od -An -tu1; printf '\\000\\377'; stty "$saved" < /dev/tty; printf '\\033[?1049l' >&2; exit 7`,
         ],
       }
-      await withTerminal(env, command, { rows: 20, columns: 80 }, async (session) => {
-        const ready = await session.expect('terminal', Buffer.from('\x1b[?1049hready'))
+      await withTerminal(env, command, { columns: 80, rows: 20 }, async (session) => {
+        const ready = await session.expect('terminal', Buffer.from('\u001B[?1049hready'))
         expect(ready.status).toEqual({ kind: 'running' })
         expect(ready.termiosRestored).toBe(false)
         await session.send(Buffer.from([3]))
         const done = await session.wait()
         expect(done.stdout).toEqual(Buffer.concat([Buffer.from('   3\n'), Buffer.from([0, 255])]))
-        expect(done.terminal).toEqual(Buffer.from('\x1b[?1049hready\x1b[?1049l'))
-        expect(done.status).toEqual({ kind: 'exited', code: 7 })
+        expect(done.terminal).toEqual(Buffer.from('\u001B[?1049hready\u001B[?1049l'))
+        expect(done.status).toEqual({ code: 7, kind: 'exited' })
         expect(done.termiosRestored).toBe(true)
         expect(done.currentTermios).toEqual(done.initialTermios)
       })
@@ -329,7 +329,7 @@ test.concurrent('terminal finite pipe input reports unread bytes and application
         expect(done.stdout).toEqual(input)
         expect(done.terminal).toEqual(Buffer.from('eof'))
         expect(done.unreadInput).toEqual(Buffer.alloc(0))
-        expect(done.status).toEqual({ kind: 'exited', code: 0 })
+        expect(done.status).toEqual({ code: 0, kind: 'exited' })
       })
       await withTerminal(
         env,
@@ -340,7 +340,7 @@ test.concurrent('terminal finite pipe input reports unread bytes and application
           expect(done.stdout).toEqual(Buffer.from([255]))
           expect(done.terminal).toEqual(Buffer.from('ready'))
           expect(done.unreadInput).toEqual(input)
-          expect(done.status).toEqual({ kind: 'exited', code: 7 })
+          expect(done.status).toEqual({ code: 7, kind: 'exited' })
           expect(done.termiosRestored).toBe(true)
           await expect(session.send(Buffer.from('x'))).rejects.toThrow('pipe')
         },
@@ -360,18 +360,20 @@ test.concurrent('non-root images install executable drivers without changing ord
     nonrootImage,
     async (env) => {
       await checkIdentity(env, original)
-      expect((await env.run({ args: ['id', '-u'] })).stdout.trim()).not.toBe('0')
+      const identityResult = await env.run({ args: ['id', '-u'] })
+      expect(identityResult.stdout.trim()).not.toBe('0')
       await installFixtureDriver(env)
       await env.writeFile('/tmp/nonroot-file', Buffer.from([0, 255]))
       expect(await env.run({ args: ['stat', '-c', '%a', '/tmp/nonroot-file'] })).toEqual({ ...empty, stdout: '644\n' })
-      expect((await env.snapshot(['/tmp/nonroot-file'])).entries).toEqual([
-        { path: '/tmp/nonroot-file', state: { kind: 'file', bytes: Buffer.from([0, 255]) } },
+      const observedSnapshot = await env.snapshot(['/tmp/nonroot-file'])
+      expect(observedSnapshot.entries).toEqual([
+        { path: '/tmp/nonroot-file', state: { bytes: Buffer.from([0, 255]), kind: 'file' } },
       ])
       await withTerminal(env, { args: ['sh', '-c', 'printf "\\377"; printf nonroot >&2'] }, {}, async (terminal) => {
         const result = await terminal.wait()
         expect(result.stdout).toEqual(Buffer.from([255]))
         expect(result.terminal).toEqual(Buffer.from('nonroot'))
-        expect(result.status).toEqual({ kind: 'exited', code: 0 })
+        expect(result.status).toEqual({ code: 0, kind: 'exited' })
       })
     },
     signal,
@@ -403,7 +405,8 @@ test.concurrent('terminal resize reaches the foreground process and retains trai
           await session.expect('terminal', Buffer.from('tail'))
           await session.resize(12, 34)
           await session.expect('terminal', Buffer.from('12 34\r\n'))
-          expect((await session.wait()).status).toEqual({ kind: 'exited', code: 0 })
+          const terminalObservationResult = await session.wait()
+          expect(terminalObservationResult.status).toEqual({ code: 0, kind: 'exited' })
         },
       )
     },
@@ -424,12 +427,12 @@ test.concurrent('terminal expectation timeout retains diagnostics and literal Ct
         await session.expect('terminal', Buffer.from('ready'))
         await expect(session.expect('stdout', Buffer.from('missing'), 0.1)).rejects.toMatchObject({
           name: 'TerminalError',
-          observation: { stdout: Buffer.alloc(0), terminal: Buffer.from('ready'), status: { kind: 'running' } },
+          observation: { status: { kind: 'running' }, stdout: Buffer.alloc(0), terminal: Buffer.from('ready') },
         })
         expect(await env.pathKind('/workspace')).toBe('directory')
         await session.send(Buffer.from([4]))
         const result = await session.wait()
-        expect(result.status).toEqual({ kind: 'exited', code: 0 })
+        expect(result.status).toEqual({ code: 0, kind: 'exited' })
         expect(result.stdout).toEqual(Buffer.alloc(0))
         expect(result.termiosRestored).toBe(true)
       })
@@ -461,13 +464,13 @@ test.concurrent('terminal signals and callback failure clean up a surviving proc
           await session.expect('terminal', Buffer.from('ready'))
           await session.signal('SIGINT')
           const done = await session.wait()
-          expect(done.status).toEqual({ kind: 'exited', code: 130 })
-          expect(done.terminal).toEqual(Buffer.from('\x1b[?1049h\x1b[?25lready\x1b[?25h\x1b[?1049l'))
+          expect(done.status).toEqual({ code: 130, kind: 'exited' })
+          expect(done.terminal).toEqual(Buffer.from('\u001B[?1049h\u001B[?25lready\u001B[?25h\u001B[?1049l'))
           expect(done.termiosRestored).toBe(true)
           expect(done.currentTermios).toEqual(done.initialTermios)
         },
       )
-      let escaped!: TerminalSession
+      const handle: { session?: TerminalSession } = {}
       const cause = new Error('consumer assertion failed')
       await expect(
         withTerminal(
@@ -475,14 +478,18 @@ test.concurrent('terminal signals and callback failure clean up a surviving proc
           { args: ['sh', '-c', 'echo $$ > /workspace/terminal-pid; printf ready >&2; exec sleep infinity'] },
           {},
           async (session) => {
-            escaped = session
+            handle.session = session
             await session.expect('terminal', Buffer.from('ready'))
             throw cause
           },
         ),
       ).rejects.toBe(cause)
-      await expect(escaped.observe()).rejects.toThrow('closed')
-      expect((await env.run({ args: ['sh', '-c', 'kill -0 "$(cat /workspace/terminal-pid)"'] })).exitCode).not.toBe(0)
+      if (!handle.session) {
+        throw new Error('Expected a terminal session')
+      }
+      await expect(handle.session.observe()).rejects.toThrow('closed')
+      const probeResult = await env.run({ args: ['sh', '-c', 'kill -0 "$(cat /workspace/terminal-pid)"'] })
+      expect(probeResult.exitCode).not.toBe(0)
       expect(await env.run({ args: ['sh', '-c', 'find /tmp -maxdepth 1 -name "caseyard-pty-*" -print'] })).toEqual(
         empty,
       )
@@ -513,8 +520,8 @@ test.concurrent('terminal raw keys preserve argv cwd HOME TERM and repeated spli
             '',
             '$(literal)',
           ],
-          workingDir: '/workspace',
           env: ['HOME=/workspace/caller-home', 'TERM=xterm-256color'],
+          workingDir: '/workspace',
         },
         {},
         async (terminal) => {
@@ -540,7 +547,7 @@ test.concurrent('terminal raw keys preserve argv cwd HOME TERM and repeated spli
             ]),
           )
           expect(done.terminal).toEqual(Buffer.from('prompt>prompt>'))
-          expect(done.status).toEqual({ kind: 'exited', code: 0 })
+          expect(done.status).toEqual({ code: 0, kind: 'exited' })
           expect(done.termiosRestored).toBe(true)
         },
       )
@@ -575,7 +582,7 @@ test.concurrent('terminal unsupported TERM is observable without changing explic
           const done = await terminal.wait()
           expect(done.stdout).toEqual(Buffer.alloc(0))
           expect(done.terminal).toEqual(Buffer.from('unsupported:unsupported-caseyard'))
-          expect(done.status).toEqual({ kind: 'exited', code: 7 })
+          expect(done.status).toEqual({ code: 7, kind: 'exited' })
           expect(done.termiosRestored).toBe(true)
         },
       )
@@ -609,31 +616,32 @@ test.concurrent('terminal tiny Enter is a no-op before long-list resize recovery
             `saved=$(stty -g < /dev/tty); stty raw -echo < /dev/tty; trap 'stty "$saved" < /dev/tty; printf "\\033[?25h\\033[?1049l" >&2' EXIT; printf '\\033[?1049h\\033[?25ltiny>' >&2; dd bs=1 count=1 2>/dev/null >/dev/null; resized=no; trap 'resized=yes' WINCH; printf ignored >&2; while [ "$resized" = no ]; do sleep 0.02; done; stty size < /dev/tty >&2; i=0; while [ "$i" -lt 4096 ]; do printf 'row%04d\\n' "$i" >&2; i=$((i+1)); done; printf 'list-end>' >&2; dd bs=1 count=3 2>/dev/null >/dev/null; printf 'page4095>' >&2; dd bs=1 count=3 2>/dev/null >/dev/null; printf 'page4094>' >&2; dd bs=1 count=1 2>/dev/null >/dev/null`,
           ],
         },
-        { rows: 1, columns: 1 },
+        { columns: 1, rows: 1 },
         async (terminal) => {
           await terminal.expect('terminal', Buffer.from('tiny>'))
           await terminal.send(Buffer.from([13]))
           await terminal.expect('terminal', Buffer.from('ignored'))
           expect(await env.snapshot(before.entries.map(({ path }) => path))).toEqual(before)
-          expect((await terminal.observe()).status).toEqual({ kind: 'running' })
+          const terminalObservationResult = await terminal.observe()
+          expect(terminalObservationResult.status).toEqual({ kind: 'running' })
           await terminal.resize(24, 80)
           await terminal.expect('terminal', Buffer.from('24 80\n'))
           await terminal.expect('terminal', Buffer.from('list-end>'))
-          await terminal.send(Buffer.from('\x1b[B'))
+          await terminal.send(Buffer.from('\u001B[B'))
           await terminal.expect('terminal', Buffer.from('page4095>'))
-          await terminal.send(Buffer.from('\x1b[A'))
+          await terminal.send(Buffer.from('\u001B[A'))
           await terminal.expect('terminal', Buffer.from('page4094>'))
           await terminal.send(Buffer.from([27]))
           const done = await terminal.wait()
           expect(done.stdout).toEqual(Buffer.alloc(0))
           expect(done.terminal).toEqual(
             Buffer.concat([
-              Buffer.from('\x1b[?1049h\x1b[?25ltiny>ignored24 80\n'),
+              Buffer.from('\u001B[?1049h\u001B[?25ltiny>ignored24 80\n'),
               list,
-              Buffer.from('list-end>page4095>page4094>\x1b[?25h\x1b[?1049l'),
+              Buffer.from('list-end>page4095>page4094>\u001B[?25h\u001B[?1049l'),
             ]),
           )
-          expect(done.status).toEqual({ kind: 'exited', code: 0 })
+          expect(done.status).toEqual({ code: 0, kind: 'exited' })
           expect(done.termiosRestored).toBe(true)
         },
       )

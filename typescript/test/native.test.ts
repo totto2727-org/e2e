@@ -2,57 +2,55 @@ import { once } from 'node:events'
 import { PassThrough, Readable } from 'node:stream'
 
 import tar from 'tar-stream'
-import { log, type StartedTestContainer } from 'testcontainers'
+import * as testcontainers from 'testcontainers'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-import {
-  DeadlineError,
-  DockerError,
-  type FilesystemSnapshot,
-  installDriver,
-  withTerminal,
-  type TerminalSession,
-  withEnvironment,
-  type Command,
-  type Environment,
-} from '../src/index.js'
+import { DeadlineError, DockerError, installDriver, withTerminal, withEnvironment } from '../src/index.ts'
+import type { FilesystemSnapshot, TerminalSession, Command, Environment } from '../src/index.ts'
 
 const backend = vi.hoisted(() => {
   const container = {
+    copyArchiveFromContainer: vi.fn<testcontainers.StartedTestContainer['copyArchiveFromContainer']>(),
+    copyContentToContainer: vi.fn<testcontainers.StartedTestContainer['copyContentToContainer']>(),
+    exec: vi.fn<testcontainers.StartedTestContainer['exec']>(),
     getId: () => 'case-container',
-    exec: vi.fn<StartedTestContainer['exec']>(),
-    copyContentToContainer: vi.fn<StartedTestContainer['copyContentToContainer']>(),
-    copyArchiveFromContainer: vi.fn<StartedTestContainer['copyArchiveFromContainer']>(),
-    stop: vi.fn<StartedTestContainer['stop']>(),
+    stop: vi.fn<testcontainers.StartedTestContainer['stop']>(),
   }
-  return { container, start: vi.fn(async () => container) }
+  return { container, start: vi.fn<() => Promise<typeof container>>().mockResolvedValue(container) }
 })
 
 // Substitute only the external Testcontainers boundary, not Docker's wire protocol.
 vi.mock('testcontainers', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('testcontainers')>()
+  const actual = await importOriginal<typeof testcontainers>()
   return {
     ...actual,
-    GenericContainer: vi.fn(function () {
-      return {
-        withLabels: vi.fn().mockReturnThis(),
-        withPullPolicy: vi.fn().mockReturnThis(),
-        withStartupTimeout: vi.fn().mockReturnThis(),
-        start: backend.start,
-      }
-    }),
+    GenericContainer: class MockContainer {
+      readonly start = backend.start
+      readonly withLabels = vi.fn().mockReturnThis()
+      readonly withPullPolicy = vi.fn().mockReturnThis()
+      readonly withStartupTimeout = vi.fn().mockReturnThis()
+    },
   }
 })
 
-const empty = { exitCode: 0, stdout: '', stderr: '' }
+const noop = async (): Promise<void> => {
+  // The test supplies a callback that has no work.
+}
+
+const failedAction = async (reason: unknown): Promise<never> => {
+  await noop()
+  throw reason
+}
+
+const empty = { exitCode: 0, stderr: '', stdout: '' }
 beforeEach(() => {
   backend.start.mockReset().mockResolvedValue(backend.container)
   backend.container.exec.mockReset().mockResolvedValue({ ...empty, output: '' })
   backend.container.copyContentToContainer.mockReset().mockResolvedValue()
   backend.container.copyArchiveFromContainer.mockReset()
   backend.container.stop.mockReset().mockResolvedValue({
-    getId: () => 'stopped',
     copyArchiveFromContainer: backend.container.copyArchiveFromContainer,
+    getId: () => 'stopped',
   })
 })
 afterEach(() => {
@@ -60,14 +58,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function scoped(action: (environment: Environment) => Promise<void>): Promise<void> {
+const scoped = async (action: (environment: Environment) => Promise<void>): Promise<void> => {
   await withEnvironment('caller:local', action)
 }
 
-function archive(entries: { name: string; bytes?: Buffer; type?: 'file' | 'directory' | 'symlink' }[]): Readable {
+const archive = (entries: { name: string; bytes?: Buffer; type?: 'file' | 'directory' | 'symlink' }[]): Readable => {
   const pack = tar.pack()
-  for (const entry of entries)
-    pack.entry({ name: entry.name, type: entry.type ?? 'file', linkname: 'target' }, entry.bytes ?? Buffer.alloc(0))
+  for (const entry of entries) {
+    pack.entry({ linkname: 'target', name: entry.name, type: entry.type ?? 'file' }, entry.bytes ?? Buffer.alloc(0))
+  }
   pack.finalize()
   return Readable.from(pack)
 }
@@ -89,18 +88,18 @@ describe('Commands', () => {
     expect(backend.container.exec).not.toHaveBeenCalled()
   })
   test('nonzero application exit is a result with distinct streams', async () => {
-    backend.container.exec.mockResolvedValue({ exitCode: 7, stdout: 'out', stderr: 'err', output: 'outerr' })
+    backend.container.exec.mockResolvedValue({ exitCode: 7, output: 'outerr', stderr: 'err', stdout: 'out' })
     await scoped(async (env) => {
-      await expect(env.run({ args: ['tool'] })).resolves.toEqual({ exitCode: 7, stdout: 'out', stderr: 'err' })
+      await expect(env.run({ args: ['tool'] })).resolves.toEqual({ exitCode: 7, stderr: 'err', stdout: 'out' })
     })
   })
   test('preserves argv, empty arguments, working directory and environment values containing equals', async () => {
     await scoped(async (env) => {
-      await env.run({ args: ['tool', '', 'a b'], workingDir: '/work', env: ['A=two words', 'B=', 'C=a=b'] })
+      await env.run({ args: ['tool', '', 'a b'], env: ['A=two words', 'B=', 'C=a=b'], workingDir: '/work' })
     })
     expect(backend.container.exec).toHaveBeenCalledWith(['tool', '', 'a b'], {
-      workingDir: '/work',
       env: { A: 'two words', B: '', C: 'a=b' },
+      workingDir: '/work',
     })
   })
   test('keeps special environment names and lets the last duplicate win', async () => {
@@ -108,16 +107,16 @@ describe('Commands', () => {
       await env.run({ args: ['tool'], env: ['__proto__=safe', 'constructor=value', 'A=old', 'A=new'] })
     })
     expect(backend.container.exec).toHaveBeenCalledWith(['tool'], {
-      env: { ['__proto__']: 'safe', constructor: 'value', A: 'new' },
+      env: { A: 'new', ['__proto__']: 'safe', constructor: 'value' },
     })
   })
   test.each([-1, Number.NaN, 0.5])('rejects unavailable or invalid application exit code %j', async (exitCode) => {
-    backend.container.exec.mockResolvedValue({ ...empty, output: '', exitCode })
+    backend.container.exec.mockResolvedValue({ ...empty, exitCode, output: '' })
     await scoped(async (env) => {
       await expect(env.run({ args: ['tool'] })).rejects.toMatchObject({
-        name: 'ExecutionError',
-        partialResult: { stdout: '', stderr: '' },
         cause: { name: 'DockerError' },
+        name: 'ExecutionError',
+        partialResult: { stderr: '', stdout: '' },
       })
     })
   })
@@ -126,9 +125,9 @@ describe('Commands', () => {
     backend.container.exec.mockRejectedValue(cause)
     await scoped(async (env) => {
       await expect(env.run({ args: ['tool'] })).rejects.toMatchObject({
+        cause: { cause, name: 'DockerError', statusCode: 500 },
         name: 'ExecutionError',
-        partialResult: { stdout: '', stderr: '' },
-        cause: { name: 'DockerError', statusCode: 500, cause },
+        partialResult: { stderr: '', stdout: '' },
       })
     })
   })
@@ -139,8 +138,8 @@ describe('Commands', () => {
     })
   })
   test('returns the decoded text supplied by Testcontainers without trimming', async () => {
-    const stdout = '\ufeffhéllo\n'
-    backend.container.exec.mockResolvedValue({ ...empty, stdout, output: stdout })
+    const stdout = '\uFEFFhéllo\n'
+    backend.container.exec.mockResolvedValue({ ...empty, output: stdout, stdout })
     await scoped(async (env) => {
       await expect(env.run({ args: ['tool'] })).resolves.toEqual({ ...empty, stdout })
     })
@@ -150,24 +149,21 @@ describe('Commands', () => {
 describe('Scope lifecycle', () => {
   test('returns arbitrary callback results after cleanup and closes its signal', async () => {
     const value = { value: 42 }
-    let signal!: AbortSignal
+    const callback: { signal?: AbortSignal } = {}
     await expect(
       withEnvironment('local', async (env) => {
-        signal = env.signal
-        return value
+        const { signal } = env
+        callback.signal = signal
+        return await Promise.resolve(value)
       }),
     ).resolves.toBe(value)
-    expect(signal.aborted).toBe(true)
-    expect(backend.container.stop).toHaveBeenCalledWith({ timeout: 0, remove: true, removeVolumes: true })
+    expect(callback.signal?.aborted).toBe(true)
+    expect(backend.container.stop).toHaveBeenCalledWith({ remove: true, removeVolumes: true, timeout: 0 })
   })
   test.each([new Error('assertion failure'), 'arbitrary failure', undefined])(
     'preserves callback rejection identity: %j',
     async (failure) => {
-      await expect(
-        withEnvironment('local', async () => {
-          throw failure
-        }),
-      ).rejects.toBe(failure)
+      await expect(withEnvironment('local', async () => await failedAction(failure))).rejects.toBe(failure)
       expect(backend.container.stop).toHaveBeenCalledOnce()
     },
   )
@@ -175,34 +171,30 @@ describe('Scope lifecycle', () => {
     const failure = new Error('callback failed')
     const cleanup = new Error('cleanup failed')
     backend.container.stop.mockRejectedValue(cleanup)
-    await expect(
-      withEnvironment('local', async () => {
-        throw failure
-      }),
-    ).rejects.toMatchObject({
+    await expect(withEnvironment('local', async () => await failedAction(failure))).rejects.toMatchObject({
+      errors: [failure, expect.objectContaining({ cause: cleanup, name: 'DockerError' })],
       name: 'AggregateError',
-      errors: [failure, expect.objectContaining({ name: 'DockerError', cause: cleanup })],
     })
   })
   test('reports cleanup failure alone', async () => {
     const cause = new Error('cleanup failed')
     backend.container.stop.mockRejectedValue(cause)
-    await expect(scoped(async () => {})).rejects.toMatchObject({ name: 'DockerError', cause })
+    await expect(scoped(noop)).rejects.toMatchObject({ cause, name: 'DockerError' })
   })
   test.each(['', 'image\0name'])('rejects invalid image %j before startup', async (image) => {
-    await expect(withEnvironment(image, async () => {})).rejects.toBeInstanceOf(TypeError)
+    await expect(withEnvironment(image, noop)).rejects.toBeInstanceOf(TypeError)
     expect(backend.start).not.toHaveBeenCalled()
   })
   test('a pre-cancelled invocation never starts Testcontainers', async () => {
     const reason = new Error('cancelled before setup')
-    await expect(withEnvironment('local', async () => {}, AbortSignal.abort(reason))).rejects.toBe(reason)
+    await expect(withEnvironment('local', noop, AbortSignal.abort(reason))).rejects.toBe(reason)
     expect(backend.start).not.toHaveBeenCalled()
   })
   test('startup failures retain their cause without invoking the callback', async () => {
     const cause = new Error('missing local image')
     backend.start.mockRejectedValue(cause)
-    const action = vi.fn(async () => {})
-    await expect(withEnvironment('missing', action)).rejects.toMatchObject({ name: 'DockerError', cause })
+    const action = vi.fn(noop)
+    await expect(withEnvironment('missing', action)).rejects.toMatchObject({ cause, name: 'DockerError' })
     expect(action).not.toHaveBeenCalled()
   })
   test('cancellation reaches callback code and cleanup remains independent', async () => {
@@ -214,6 +206,7 @@ describe('Scope lifecycle', () => {
         async (env) => {
           controller.abort(reason)
           expect(env.signal.reason).toBe(reason)
+          await noop()
         },
         controller.signal,
       ),
@@ -222,16 +215,16 @@ describe('Scope lifecycle', () => {
   })
   test('command timeout releases the scope even when Testcontainers exec never resolves', async () => {
     vi.useFakeTimers()
-    backend.container.exec.mockReturnValue(new Promise(() => {}))
-    const ready = Promise.withResolvers<void>()
+    backend.container.exec.mockReturnValue(Promise.withResolvers<never>().promise)
+    const ready = Promise.withResolvers<true>()
     const execution = scoped(async (env) => {
-      ready.resolve()
+      ready.resolve(true)
       await env.run({ args: ['sleep', 'infinity'] })
     })
     const assertion = expect(execution).rejects.toMatchObject({
-      name: 'ExecutionError',
       cause: { name: 'DeadlineError' },
-      partialResult: { stdout: '', stderr: '' },
+      name: 'ExecutionError',
+      partialResult: { stderr: '', stdout: '' },
     })
     await ready.promise
     await vi.advanceTimersByTimeAsync(60_000)
@@ -242,7 +235,7 @@ describe('Scope lifecycle', () => {
     vi.useFakeTimers()
     const starting = Promise.withResolvers<typeof backend.container>()
     backend.start.mockReturnValue(starting.promise)
-    const action = vi.fn(async () => {})
+    const action = vi.fn(noop)
     const assertion = expect(withEnvironment('local', action)).rejects.toBeInstanceOf(DeadlineError)
     await vi.advanceTimersByTimeAsync(60_000)
     await assertion
@@ -256,8 +249,10 @@ describe('Scope lifecycle', () => {
     const starting = Promise.withResolvers<typeof backend.container>()
     backend.start.mockReturnValue(starting.promise)
     backend.container.stop.mockRejectedValue(new Error('late cleanup failed'))
-    const diagnostic = vi.spyOn(log, 'error').mockImplementation(() => {})
-    const assertion = expect(scoped(async () => {})).rejects.toBeInstanceOf(DeadlineError)
+    const diagnostic = vi.spyOn(testcontainers.log, 'error').mockImplementation(() => {
+      // Capture the diagnostic without emitting it.
+    })
+    const assertion = expect(scoped(noop)).rejects.toBeInstanceOf(DeadlineError)
     await vi.advanceTimersByTimeAsync(60_000)
     await assertion
     starting.resolve(backend.container)
@@ -268,24 +263,27 @@ describe('Scope lifecycle', () => {
   })
   test('cleanup waiting has its own fresh 30-second budget', async () => {
     vi.useFakeTimers()
-    backend.container.stop.mockReturnValue(new Promise(() => {}))
-    const assertion = expect(scoped(async () => {})).rejects.toBeInstanceOf(DeadlineError)
+    backend.container.stop.mockReturnValue(Promise.withResolvers<never>().promise)
+    const assertion = expect(scoped(noop)).rejects.toBeInstanceOf(DeadlineError)
     await vi.advanceTimersByTimeAsync(30_000)
     await assertion
   })
   test('does not add a fixed concurrency queue', async () => {
-    const ready = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    let entered = 0
-    const scopes = Array.from({ length: 3 }, () =>
-      scoped(async () => {
-        if (++entered === 3) ready.resolve()
+    const ready = Promise.withResolvers<true>()
+    const release = Promise.withResolvers<true>()
+    const entered: undefined[] = []
+    const scopes = Array.from({ length: 3 }, async () => {
+      await scoped(async () => {
+        entered.push(undefined)
+        if (entered.length === 3) {
+          ready.resolve(true)
+        }
         await release.promise
-      }),
-    )
+      })
+    })
     await ready.promise
-    expect(entered).toBe(3)
-    release.resolve()
+    expect(entered).toHaveLength(3)
+    release.resolve(true)
     await Promise.all(scopes)
   })
 })
@@ -305,11 +303,11 @@ describe('File operations', () => {
       await env.writeFile('/workspace/binary', bytes)
     })
     expect(backend.container.copyContentToContainer).toHaveBeenCalledWith([
-      { target: '/workspace/binary', content: bytes, mode: 0o644 },
+      { content: bytes, mode: 0o644, target: '/workspace/binary' },
     ])
   })
   test('does not create missing parent directories', async () => {
-    backend.container.exec.mockResolvedValue({ ...empty, output: '', exitCode: 1 })
+    backend.container.exec.mockResolvedValue({ ...empty, exitCode: 1, output: '' })
     await scoped(async (env) => {
       await expect(env.writeFile('/missing/file', Buffer.alloc(0))).rejects.toThrow('Parent directory')
     })
@@ -317,7 +315,7 @@ describe('File operations', () => {
   })
   test('reads exact bytes from the archive supplied by Testcontainers', async () => {
     const bytes = Buffer.from([0, 255, 10, 13, 1])
-    backend.container.copyArchiveFromContainer.mockResolvedValue(archive([{ name: 'binary', bytes }]))
+    backend.container.copyArchiveFromContainer.mockResolvedValue(archive([{ bytes, name: 'binary' }]))
     await scoped(async (env) => {
       await expect(env.readFile('/workspace/binary')).resolves.toEqual(bytes)
     })
@@ -337,14 +335,14 @@ describe('File operations', () => {
     const cause = new Error('archive transfer failed')
     backend.container.copyArchiveFromContainer.mockRejectedValue(cause)
     await scoped(async (env) => {
-      await expect(env.readFile('/file')).rejects.toMatchObject({ name: 'DockerError', cause })
+      await expect(env.readFile('/file')).rejects.toMatchObject({ cause, name: 'DockerError' })
     })
   })
   test('write transfer errors retain their original cause', async () => {
     const cause = new Error('copy failed')
     backend.container.copyContentToContainer.mockRejectedValue(cause)
     await scoped(async (env) => {
-      await expect(env.writeFile('/file', Buffer.alloc(0))).rejects.toMatchObject({ name: 'DockerError', cause })
+      await expect(env.writeFile('/file', Buffer.alloc(0))).rejects.toMatchObject({ cause, name: 'DockerError' })
     })
   })
   test('truncated archive streams reject instead of producing partial file bytes', async () => {
@@ -399,7 +397,11 @@ describe('File operations', () => {
 describe('Physical path observations', () => {
   test.each(['pathKind', 'readSymlink'] as const)('%s rejects invalid paths before execution', async (method) => {
     await scoped(async (env) => {
-      for (const path of ['', 'bad\0path']) await expect(env[method](path)).rejects.toBeInstanceOf(TypeError)
+      await Promise.all(
+        ['', 'bad\0path'].map(async (path) => {
+          await expect(env[method](path)).rejects.toBeInstanceOf(TypeError)
+        }),
+      )
     })
     expect(backend.container.exec).not.toHaveBeenCalled()
   })
@@ -411,7 +413,9 @@ describe('Physical path observations', () => {
     { exits: [1, 1, 1, 1], kind: 'missing' },
     { exits: [1, 1, 1, 0], kind: 'other' },
   ])('classifies physical $kind without reading its content or target', async ({ exits, kind }) => {
-    for (const exitCode of exits) backend.container.exec.mockResolvedValueOnce({ ...empty, output: '', exitCode })
+    for (const exitCode of exits) {
+      backend.container.exec.mockResolvedValueOnce({ ...empty, exitCode, output: '' })
+    }
     await scoped(async (env) => {
       await expect(env.pathKind('/path')).resolves.toBe(kind)
     })
@@ -420,18 +424,19 @@ describe('Physical path observations', () => {
   })
 
   test.each([0, 1, 2, 3])('probe failure at step %i is not absence', async (step) => {
-    for (let index = 0; index < step; index++)
-      backend.container.exec.mockResolvedValueOnce({ ...empty, output: '', exitCode: 1 })
-    backend.container.exec.mockResolvedValueOnce({ ...empty, exitCode: 2, stderr: 'probe failed', output: '' })
+    for (const _index of Array.from({ length: step })) {
+      backend.container.exec.mockResolvedValueOnce({ ...empty, exitCode: 1, output: '' })
+    }
+    backend.container.exec.mockResolvedValueOnce({ ...empty, exitCode: 2, output: '', stderr: 'probe failed' })
     await scoped(async (env) => {
       await expect(env.pathKind('/path')).rejects.toBeInstanceOf(DockerError)
     })
   })
 
-  test.each(['relative-target', '../target\n', '\ufefftarget\n\n'])(
+  test.each(['relative-target', '../target\n', '\uFEFFtarget\n\n'])(
     'reads literal decoded link target %j',
     async (target) => {
-      backend.container.exec.mockResolvedValue({ ...empty, stdout: `${target}\n`, output: `${target}\n` })
+      backend.container.exec.mockResolvedValue({ ...empty, output: `${target}\n`, stdout: `${target}\n` })
       await scoped(async (env) => {
         await expect(env.readSymlink('/link')).resolves.toBe(target)
       })
@@ -441,7 +446,7 @@ describe('Physical path observations', () => {
   test.each([
     { ...empty, exitCode: 1 },
     { ...empty, stdout: 'no newline' },
-    { ...empty, stdout: 'target\n', stderr: 'diagnostic' },
+    { ...empty, stderr: 'diagnostic', stdout: 'target\n' },
   ])('link read failure is not an empty target: %j', async (result) => {
     backend.container.exec.mockResolvedValue({ ...result, output: '' })
     await scoped(async (env) => {
@@ -453,66 +458,67 @@ describe('Physical path observations', () => {
     const cause = new Error('daemon failed')
     backend.container.exec.mockRejectedValue(cause)
     await scoped(async (env) => {
-      await expect(env[method]('/path')).rejects.toMatchObject({ name: 'ExecutionError', cause: { cause } })
+      await expect(env[method]('/path')).rejects.toMatchObject({ cause: { cause }, name: 'ExecutionError' })
     })
   })
 })
 
-async function installMock(env: Environment): Promise<void> {
+const installMock = async (env: Environment): Promise<void> => {
   backend.container.exec
-    .mockResolvedValueOnce({ ...empty, stdout: '/tmp/caseyard-driver-test\n', output: '' })
+    .mockResolvedValueOnce({ ...empty, output: '', stdout: '/tmp/caseyard-driver-test\n' })
     .mockResolvedValueOnce({ ...empty, output: '' })
   await installDriver(env, Buffer.from('executable'))
 }
 
-async function driverScoped(action: (env: Environment) => Promise<void>): Promise<void> {
+const driverScoped = async (action: (env: Environment) => Promise<void>): Promise<void> => {
   await scoped(async (env) => {
     await installMock(env)
     await action(env)
   })
 }
 
-function driverResult(value: unknown) {
-  return { ...empty, stdout: JSON.stringify({ ok: true, value }), output: '' }
-}
+const driverResult = (value: unknown) => ({ ...empty, output: '', stdout: JSON.stringify({ ok: true, value }) })
 
 const terminalObservation = {
+  currentTermios: [1, [2, 3]],
+  initialTermios: [1, [2, 3]],
+  status: { code: 7, kind: 'exited' },
   stdout: [0, 255, 27],
   terminal: [27, 91, 65],
-  unreadInput: [10],
-  status: { kind: 'exited', code: 7 },
   termiosRestored: true,
-  initialTermios: [1, [2, 3]],
-  currentTermios: [1, [2, 3]],
+  unreadInput: [10],
 }
 
-function terminalBackend(value: unknown = terminalObservation): void {
+const terminalBackend = (value: unknown = terminalObservation): void => {
   backend.container.exec.mockImplementation(async (args) => {
-    if (args[1] === 'start') return driverResult({ path: '/tmp/caseyard-pty-test/socket' })
+    if (args[1] === 'start') {
+      return await Promise.resolve(driverResult({ path: '/tmp/caseyard-pty-test/socket' }))
+    }
     const request: unknown = JSON.parse(args[2] ?? '{}')
-    if (typeof request === 'object' && request !== null && 'operation' in request && request.operation === 'close')
-      return driverResult(null)
-    return driverResult(value)
+    if (typeof request === 'object' && request !== null && 'operation' in request && request.operation === 'close') {
+      return await Promise.resolve(driverResult(null))
+    }
+    return await Promise.resolve(driverResult(value))
   })
 }
 
 describe('Static driver installation', () => {
   test('concurrent install attempts cannot stage or overwrite a second driver', async () => {
-    const staging = Promise.withResolvers<Awaited<ReturnType<StartedTestContainer['exec']>>>()
+    const staging = Promise.withResolvers<Awaited<ReturnType<testcontainers.StartedTestContainer['exec']>>>()
     backend.container.exec.mockReturnValueOnce(staging.promise)
     await scoped(async (env) => {
       const first = installDriver(env, Buffer.from('first'))
       await expect(installDriver(env, Buffer.from('second'))).rejects.toThrow('already installed')
-      staging.resolve({ ...empty, stdout: '/tmp/caseyard-driver-test\n', output: '' })
+      staging.resolve({ ...empty, output: '', stdout: '/tmp/caseyard-driver-test\n' })
       await first
     })
     expect(backend.container.copyContentToContainer).toHaveBeenCalledExactlyOnceWith([
-      { target: '/tmp/caseyard-driver-test/driver', content: Buffer.from('first'), mode: 0o755 },
+      { content: Buffer.from('first'), mode: 0o755, target: '/tmp/caseyard-driver-test/driver' },
     ])
   })
 
   test('failed installation does not publish a usable driver', async () => {
-    backend.container.exec.mockResolvedValue({ ...empty, output: '', exitCode: 1, stderr: 'mktemp denied' })
+    backend.container.exec.mockResolvedValue({ ...empty, exitCode: 1, output: '', stderr: 'mktemp denied' })
     await scoped(async (env) => {
       await expect(installDriver(env, Buffer.from('executable'))).rejects.toThrow('mktemp denied')
       await expect(env.snapshot(['/path'])).rejects.toThrow('installDriver')
@@ -523,7 +529,7 @@ describe('Static driver installation', () => {
   test('driver APIs reject use before installation', async () => {
     await scoped(async (env) => {
       await expect(env.snapshot(['/file'])).rejects.toThrow('installDriver')
-      await expect(withTerminal(env, { args: ['tool'] }, {}, async () => {})).rejects.toThrow('installDriver')
+      await expect(withTerminal(env, { args: ['tool'] }, {}, noop)).rejects.toThrow('installDriver')
     })
     expect(backend.container.exec).not.toHaveBeenCalled()
   })
@@ -533,7 +539,7 @@ describe('Static driver installation', () => {
       await expect(installDriver(env, Buffer.from('other'))).rejects.toThrow('already installed')
     })
     expect(backend.container.copyContentToContainer).toHaveBeenCalledWith([
-      { target: '/tmp/caseyard-driver-test/driver', content: Buffer.from('executable'), mode: 0o755 },
+      { content: Buffer.from('executable'), mode: 0o755, target: '/tmp/caseyard-driver-test/driver' },
     ])
     expect(backend.container.exec.mock.calls.some(([args]) => args[0] === 'chmod')).toBe(false)
   })
@@ -551,17 +557,18 @@ describe('Scoped terminals', () => {
     terminalBackend()
     const controller = new AbortController()
     const reason = new Error('cancel during terminal close')
-    const closing = Promise.withResolvers<void>()
-    const closed = Promise.withResolvers<Awaited<ReturnType<StartedTestContainer['exec']>>>()
+    const closing = Promise.withResolvers<true>()
+    const closed = Promise.withResolvers<Awaited<ReturnType<testcontainers.StartedTestContainer['exec']>>>()
     const execution = withEnvironment(
       'local',
       async (env) => {
         await installMock(env)
         await withTerminal(env, { args: ['tool'] }, {}, async () => {
-          backend.container.exec.mockImplementationOnce(() => {
-            closing.resolve()
-            return closed.promise
+          backend.container.exec.mockImplementationOnce(async () => {
+            closing.resolve(true)
+            return await closed.promise
           })
+          await noop()
         })
       },
       controller.signal,
@@ -577,20 +584,20 @@ describe('Scoped terminals', () => {
   test('terminal cleanup gets a fresh thirty seconds near the environment deadline', async () => {
     vi.useFakeTimers()
     terminalBackend()
-    const closing = Promise.withResolvers<void>()
+    const closing = Promise.withResolvers<true>()
     const execution = scoped(async (env) => {
       await installMock(env)
       await withTerminal(env, { args: ['tool'] }, {}, async () => {
         await vi.advanceTimersByTimeAsync(59_999)
-        backend.container.exec.mockImplementationOnce(() => {
-          closing.resolve()
-          return new Promise(() => {})
+        backend.container.exec.mockImplementationOnce(async () => {
+          closing.resolve(true)
+          return await Promise.withResolvers<never>().promise
         })
       })
     })
     const assertion = expect(execution).rejects.toMatchObject({
-      name: 'ExecutionError',
       cause: { message: 'Terminal cleanup deadline exceeded' },
+      name: 'ExecutionError',
     })
     await closing.promise
     await vi.advanceTimersByTimeAsync(29_999)
@@ -604,16 +611,16 @@ describe('Scoped terminals', () => {
     terminalBackend()
     const controller = new AbortController()
     const reason = new Error('cancel terminal')
-    let escaped!: TerminalSession
+    const handle: { session?: TerminalSession } = {}
     await expect(
       withEnvironment(
         'local',
         async (env) => {
           await installMock(env)
           await withTerminal(env, { args: ['tool'] }, {}, async (session) => {
-            escaped = session
-            backend.container.exec.mockReturnValueOnce(new Promise(() => {}))
-            const assertion = expect(session.observe()).rejects.toMatchObject({ name: 'ExecutionError', cause: reason })
+            handle.session = session
+            backend.container.exec.mockReturnValueOnce(Promise.withResolvers<never>().promise)
+            const assertion = expect(session.observe()).rejects.toMatchObject({ cause: reason, name: 'ExecutionError' })
             controller.abort(reason)
             await assertion
           })
@@ -621,9 +628,14 @@ describe('Scoped terminals', () => {
         controller.signal,
       ),
     ).rejects.toBe(reason)
-    await expect(escaped.observe()).rejects.toThrow('closed')
+    if (!handle.session) {
+      throw new Error('Expected a terminal session')
+    }
+    await expect(handle.session.observe()).rejects.toThrow('closed')
     expect(backend.container.stop).toHaveBeenCalledOnce()
-    expect(backend.container.exec.mock.calls.some(([args]) => args[2]?.includes('"operation":"close"'))).toBe(false)
+    expect(backend.container.exec.mock.calls.some(([args]) => args[2]?.includes('"operation":"close"') === true)).toBe(
+      false,
+    )
   })
 
   test('invalid operation bounds reject as promises without invoking the driver', async () => {
@@ -642,11 +654,11 @@ describe('Scoped terminals', () => {
 
   test('preserves raw bytes and normalized settings, forwards command context, closes and invalidates the handle', async () => {
     terminalBackend()
-    let escaped!: TerminalSession
+    const handle: { session?: TerminalSession } = {}
     await driverScoped(async (env) => {
       await expect(
-        withTerminal(env, { args: ['tool', ''], workingDir: '/workspace', env: ['A=b=c'] }, {}, async (session) => {
-          escaped = session
+        withTerminal(env, { args: ['tool', ''], env: ['A=b=c'], workingDir: '/workspace' }, {}, async (session) => {
+          handle.session = session
           expect(await session.observe()).toEqual({
             ...terminalObservation,
             stdout: Buffer.from([0, 255, 27]),
@@ -661,21 +673,24 @@ describe('Scoped terminals', () => {
           return 42
         }),
       ).resolves.toBe(42)
-      await expect(escaped.observe()).rejects.toThrow('closed')
+      if (!handle.session) {
+        throw new Error('Expected a terminal session')
+      }
+      await expect(handle.session.observe()).rejects.toThrow('closed')
     })
     expect(backend.container.exec).toHaveBeenCalledWith(
       [
         '/tmp/caseyard-driver-test/driver',
         'start',
-        JSON.stringify({ argv: ['tool', ''], rows: 40, columns: 120, timeout: 50, input: null }),
+        JSON.stringify({ argv: ['tool', ''], columns: 120, input: null, rows: 40, timeout: 50 }),
       ],
-      { workingDir: '/workspace', env: { A: 'b=c' } },
+      { env: { A: 'b=c' }, workingDir: '/workspace' },
     )
     expect(backend.container.exec).toHaveBeenLastCalledWith(
       [
         '/tmp/caseyard-driver-test/driver',
         'request',
-        JSON.stringify({ path: '/tmp/caseyard-pty-test/socket', operation: 'close' }),
+        JSON.stringify({ operation: 'close', path: '/tmp/caseyard-pty-test/socket' }),
       ],
       { env: {} },
     )
@@ -686,11 +701,9 @@ describe('Scoped terminals', () => {
     async (cause) => {
       terminalBackend()
       await driverScoped(async (env) => {
-        await expect(
-          withTerminal(env, { args: ['tool'] }, {}, async () => {
-            throw cause
-          }),
-        ).rejects.toBe(cause)
+        await expect(withTerminal(env, { args: ['tool'] }, {}, async () => await failedAction(cause))).rejects.toBe(
+          cause,
+        )
       })
       expect(backend.container.exec).toHaveBeenLastCalledWith(
         expect.arrayContaining([expect.stringContaining('"operation":"close"')]),
@@ -700,25 +713,26 @@ describe('Scoped terminals', () => {
   )
 
   test('retains callback and close failures together', async () => {
-    backend.container.exec.mockImplementation(async (args) =>
-      args[1] === 'start'
-        ? driverResult({ path: '/tmp/caseyard-pty-test/socket' })
-        : {
-            ...empty,
-            exitCode: 1,
-            stdout: JSON.stringify({ ok: false, error: 'close failed', observation: null }),
-            output: '',
-          },
+    backend.container.exec.mockImplementation(
+      async (args) =>
+        await Promise.resolve(
+          args[1] === 'start'
+            ? driverResult({ path: '/tmp/caseyard-pty-test/socket' })
+            : {
+                ...empty,
+                exitCode: 1,
+                output: '',
+                stdout: JSON.stringify({ error: 'close failed', observation: null, ok: false }),
+              },
+        ),
     )
     const cause = new Error('callback failure')
     await driverScoped(async (env) => {
       await expect(
-        withTerminal(env, { args: ['tool'] }, {}, async () => {
-          throw cause
-        }),
+        withTerminal(env, { args: ['tool'] }, {}, async () => await failedAction(cause)),
       ).rejects.toMatchObject({
+        errors: [cause, expect.objectContaining({ message: 'close failed', name: 'TerminalError' })],
         name: 'AggregateError',
-        errors: [cause, expect.objectContaining({ name: 'TerminalError', message: 'close failed' })],
       })
     })
   })
@@ -728,29 +742,34 @@ describe('Scoped terminals', () => {
     await driverScoped(async (env) => {
       await withTerminal(env, { args: ['tool'] }, { input: Buffer.from([0, 255]) }, async (session) => {
         await expect(session.send(Buffer.from('x'))).rejects.toThrow('pipe')
-        expect((await session.wait()).unreadInput).toEqual(Buffer.from([10]))
+        const terminalObservationResult = await session.wait()
+        expect(terminalObservationResult.unreadInput).toEqual(Buffer.from([10]))
       })
     })
   })
 
-  test.each([{ rows: 0 }, { columns: 65536 }, { rows: 0.5 }, { timeout: 0 }, { timeout: Number.NaN }, { timeout: 61 }])(
-    'invalid terminal options fail before start %j',
-    async (options) => {
-      await scoped(async (env) => {
-        await expect(withTerminal(env, { args: ['tool'] }, options, async () => {})).rejects.toBeInstanceOf(TypeError)
-      })
-      expect(backend.container.exec).not.toHaveBeenCalled()
-    },
-  )
+  test.each([
+    { rows: 0 },
+    { columns: 65_536 },
+    { rows: 0.5 },
+    { timeout: 0 },
+    { timeout: Number.NaN },
+    { timeout: 61 },
+  ])('invalid terminal options fail before start %j', async (options) => {
+    await scoped(async (env) => {
+      await expect(withTerminal(env, { args: ['tool'] }, options, noop)).rejects.toBeInstanceOf(TypeError)
+    })
+    expect(backend.container.exec).not.toHaveBeenCalled()
+  })
 
   test.each([
     { ...terminalObservation, stdout: [256] },
     { ...terminalObservation, terminal: [-1] },
     { ...terminalObservation, unreadInput: [1.5] },
-    { ...terminalObservation, status: { kind: 'exited', code: -1 } },
-    { ...terminalObservation, status: { kind: 'running', code: 7 } },
-    { ...terminalObservation, status: { kind: 'exited', code: 7, signal: 15 } },
-    { ...terminalObservation, status: { kind: 'signaled', signal: 15, code: 7 } },
+    { ...terminalObservation, status: { code: -1, kind: 'exited' } },
+    { ...terminalObservation, status: { code: 7, kind: 'running' } },
+    { ...terminalObservation, status: { code: 7, kind: 'exited', signal: 15 } },
+    { ...terminalObservation, status: { code: 7, kind: 'signaled', signal: 15 } },
     { ...terminalObservation, termiosRestored: 'true' },
     { ...terminalObservation, currentTermios: ['invalid'] },
   ])('rejects malformed observation %j', async (value) => {
@@ -769,12 +788,12 @@ describe('Scoped terminals', () => {
         backend.container.exec.mockResolvedValueOnce({
           ...empty,
           exitCode: 1,
+          output: '',
           stdout: JSON.stringify({
-            ok: false,
             error: 'waiting for terminal bytes',
             observation: terminalObservation,
+            ok: false,
           }),
-          output: '',
         })
         await expect(session.expect('terminal', Buffer.from('absent'), 1)).rejects.toMatchObject({
           name: 'TerminalError',
@@ -788,12 +807,18 @@ describe('Scoped terminals', () => {
 describe('Filesystem snapshots', () => {
   test('defensively copies arbitrary link target bytes on observation', async () => {
     backend.container.exec.mockResolvedValue(
-      driverResult([{ path: '/link', kind: 'symlink', data: [], target: [255, 10] }]),
+      driverResult([{ data: [], kind: 'symlink', path: '/link', target: [255, 10] }]),
     )
     await driverScoped(async (env) => {
       const snapshot = await env.snapshot(['/link'])
-      const state = snapshot.entries[0]!.state
-      if (state.kind !== 'symlink') throw new Error('Expected symlink')
+      const [entry] = snapshot.entries
+      if (!entry) {
+        throw new Error('Expected one snapshot entry')
+      }
+      const { state } = entry
+      if (state.kind !== 'symlink') {
+        throw new Error('Expected symlink')
+      }
       state.target.fill(1)
       expect(snapshot).toEqual({
         entries: [{ path: '/link', state: { kind: 'symlink', target: Buffer.from([255, 10]) } }],
@@ -803,17 +828,18 @@ describe('Filesystem snapshots', () => {
 
   test('empty explicit path sets do not execute or require driver installation', async () => {
     await scoped(async (env) => {
-      expect((await env.snapshot([])).entries).toEqual([])
+      const observedSnapshot = await env.snapshot([])
+      expect(observedSnapshot.entries).toEqual([])
     })
     expect(backend.container.exec).not.toHaveBeenCalled()
   })
 
   test.each([
-    { path: '/path', kind: 'socket', data: [], target: [] },
-    { path: '/path', kind: 'file', data: [256], target: [] },
-    { path: '/path', kind: 'symlink', data: [], target: [-1] },
-    { path: '/path', kind: 'directory', data: [1], target: [] },
-    { path: '/other', kind: 'missing', data: [], target: [] },
+    { data: [], kind: 'socket', path: '/path', target: [] },
+    { data: [256], kind: 'file', path: '/path', target: [] },
+    { data: [], kind: 'symlink', path: '/path', target: [-1] },
+    { data: [1], kind: 'directory', path: '/path', target: [] },
+    { data: [], kind: 'missing', path: '/other', target: [] },
   ])('rejects invalid snapshot wire entry %j', async (entry) => {
     backend.container.exec.mockResolvedValue(driverResult([entry]))
     await driverScoped(async (env) => {
@@ -822,12 +848,13 @@ describe('Filesystem snapshots', () => {
   })
 
   test('literal targets preserve invalid UTF-8, byte-order markers and trailing newlines', async () => {
-    const target = Buffer.concat([Buffer.from([255]), Buffer.from('\ufefftarget\n')])
+    const target = Buffer.concat([Buffer.from([255]), Buffer.from('\uFEFFtarget\n')])
     backend.container.exec.mockResolvedValue(
-      driverResult([{ path: '/link', kind: 'symlink', data: [], target: [...Buffer.from(target)] }]),
+      driverResult([{ data: [], kind: 'symlink', path: '/link', target: [...Buffer.from(target)] }]),
     )
     await driverScoped(async (env) => {
-      expect((await env.snapshot(['/link'])).entries).toEqual([{ path: '/link', state: { kind: 'symlink', target } }])
+      const observedSnapshot = await env.snapshot(['/link'])
+      expect(observedSnapshot.entries).toEqual([{ path: '/link', state: { kind: 'symlink', target } }])
     })
   })
 
@@ -835,16 +862,17 @@ describe('Filesystem snapshots', () => {
     const bytes = Buffer.from([0, 255, 13, 10])
     backend.container.exec.mockResolvedValue(
       driverResult([
-        { path: '/dir', kind: 'directory', data: [], target: [] },
-        { path: '/file', kind: 'file', data: [...bytes], target: [] },
-        { path: '/link', kind: 'symlink', data: [], target: [...Buffer.from('../absent\n')] },
-        { path: '/missing', kind: 'missing', data: [], target: [] },
+        { data: [], kind: 'directory', path: '/dir', target: [] },
+        { data: [...bytes], kind: 'file', path: '/file', target: [] },
+        { data: [], kind: 'symlink', path: '/link', target: [...Buffer.from('../absent\n')] },
+        { data: [], kind: 'missing', path: '/missing', target: [] },
       ]),
     )
     await driverScoped(async (env) => {
-      expect((await env.snapshot(['/missing', '/link', '/file', '/dir', '/file'])).entries).toEqual([
+      const observedSnapshot = await env.snapshot(['/missing', '/link', '/file', '/dir', '/file'])
+      expect(observedSnapshot.entries).toEqual([
         { path: '/dir', state: { kind: 'directory' } },
-        { path: '/file', state: { kind: 'file', bytes } },
+        { path: '/file', state: { bytes, kind: 'file' } },
         { path: '/link', state: { kind: 'symlink', target: Buffer.from('../absent\n') } },
         { path: '/missing', state: { kind: 'missing' } },
       ])
@@ -854,26 +882,32 @@ describe('Filesystem snapshots', () => {
 
   test('detaches captured byte buffers on every read', async () => {
     backend.container.exec.mockResolvedValue(
-      driverResult([{ path: '/file', kind: 'file', data: [0, 255], target: [] }]),
+      driverResult([{ data: [0, 255], kind: 'file', path: '/file', target: [] }]),
     )
     await driverScoped(async (env) => {
       const snapshot = await env.snapshot(['/file'])
-      const state = snapshot.entries[0]!.state
-      if (state.kind !== 'file') throw new Error('Expected file')
+      const [entry] = snapshot.entries
+      if (!entry) {
+        throw new Error('Expected one snapshot entry')
+      }
+      const { state } = entry
+      if (state.kind !== 'file') {
+        throw new Error('Expected file')
+      }
       state.bytes.fill(2)
-      expect(snapshot).toEqual({ entries: [{ path: '/file', state: { kind: 'file', bytes: Buffer.from([0, 255]) } }] })
+      expect(snapshot).toEqual({ entries: [{ path: '/file', state: { bytes: Buffer.from([0, 255]), kind: 'file' } }] })
       expect(Object.isFrozen(snapshot.entries)).toBe(true)
       expect(Object.isFrozen(snapshot)).toBe(true)
     })
   })
 
-  test('exposes sorted plain state for framework equality and saved snapshots', async ({ expect }) => {
+  test('exposes sorted plain state for framework equality and saved snapshots', async () => {
     backend.container.exec.mockResolvedValue(
       driverResult([
-        { path: '/content', kind: 'file', data: [0, 255, 13, 10], target: [] },
-        { path: '/directory', kind: 'directory', data: [], target: [] },
-        { path: '/missing', kind: 'missing', data: [], target: [] },
-        { path: '/target', kind: 'symlink', data: [], target: [255, 10] },
+        { data: [0, 255, 13, 10], kind: 'file', path: '/content', target: [] },
+        { data: [], kind: 'directory', path: '/directory', target: [] },
+        { data: [], kind: 'missing', path: '/missing', target: [] },
+        { data: [], kind: 'symlink', path: '/target', target: [255, 10] },
       ]),
     )
     await driverScoped(async (env) => {
@@ -881,7 +915,7 @@ describe('Filesystem snapshots', () => {
       expect(snapshot).toMatchSnapshot()
       expect(snapshot).toEqual({
         entries: [
-          { path: '/content', state: { kind: 'file', bytes: Buffer.from([0, 255, 13, 10]) } },
+          { path: '/content', state: { bytes: Buffer.from([0, 255, 13, 10]), kind: 'file' } },
           { path: '/directory', state: { kind: 'directory' } },
           { path: '/missing', state: { kind: 'missing' } },
           { path: '/target', state: { kind: 'symlink', target: Buffer.from([255, 10]) } },
@@ -891,14 +925,14 @@ describe('Filesystem snapshots', () => {
   })
 
   test.each([
-    { path: '/different', state: { kind: 'file' as const, bytes: Buffer.from([0, 255]) } },
-    { path: '/file', state: { kind: 'file' as const, bytes: Buffer.from([0, 254]) } },
+    { path: '/different', state: { bytes: Buffer.from([0, 255]), kind: 'file' as const } },
+    { path: '/file', state: { bytes: Buffer.from([0, 254]), kind: 'file' as const } },
     { path: '/file', state: { kind: 'missing' as const } },
     { path: '/file', state: { kind: 'directory' as const } },
     { path: '/file', state: { kind: 'symlink' as const, target: Buffer.from([0, 255]) } },
   ])('native equality sees changed path, bytes, presence or kind: %j', async (entry) => {
     backend.container.exec.mockResolvedValue(
-      driverResult([{ path: '/file', kind: 'file', data: [0, 255], target: [] }]),
+      driverResult([{ data: [0, 255], kind: 'file', path: '/file', target: [] }]),
     )
     await driverScoped(async (env) => {
       expect(await env.snapshot(['/file'])).not.toEqual({ entries: [entry] })
@@ -908,7 +942,7 @@ describe('Filesystem snapshots', () => {
 
   test('native equality sees changed literal link target bytes', async () => {
     backend.container.exec.mockResolvedValue(
-      driverResult([{ path: '/link', kind: 'symlink', data: [], target: [255] }]),
+      driverResult([{ data: [], kind: 'symlink', path: '/link', target: [255] }]),
     )
     await driverScoped(async (env) => {
       expect(await env.snapshot(['/link'])).not.toEqual({
@@ -929,9 +963,9 @@ describe('Filesystem snapshots', () => {
     async (stderr) => {
       backend.container.exec.mockResolvedValue({
         exitCode: 1,
-        stdout: JSON.stringify({ ok: false, error: stderr, observation: null }),
-        stderr: '',
         output: '',
+        stderr: '',
+        stdout: JSON.stringify({ error: stderr, observation: null, ok: false }),
       })
       await driverScoped(async (env) => {
         await expect(env.snapshot(['/path'])).rejects.toThrow(stderr)
@@ -953,8 +987,8 @@ describe('Filesystem snapshots', () => {
     backend.container.exec.mockResolvedValue({
       ...empty,
       exitCode: 1,
-      stdout: JSON.stringify({ ok: false, error: 'file read denied', observation: null }),
       output: '',
+      stdout: JSON.stringify({ error: 'file read denied', observation: null, ok: false }),
     })
     await driverScoped(async (env) => {
       await expect(env.snapshot(['/file'])).rejects.toThrow('file read denied')
@@ -962,12 +996,11 @@ describe('Filesystem snapshots', () => {
   })
 
   test('recapture returns changed state without changing the baseline', async () => {
-    backend.container.exec.mockResolvedValue(driverResult([{ path: '/path', kind: 'directory', data: [], target: [] }]))
+    backend.container.exec.mockResolvedValue(driverResult([{ data: [], kind: 'directory', path: '/path', target: [] }]))
     const baseline: FilesystemSnapshot = { entries: [{ path: '/path', state: { kind: 'missing' } }] }
     await driverScoped(async (env) => {
-      expect((await env.snapshot(baseline.entries.map(({ path }) => path))).entries).toEqual([
-        { path: '/path', state: { kind: 'directory' } },
-      ])
+      const observedSnapshot = await env.snapshot(baseline.entries.map(({ path }) => path))
+      expect(observedSnapshot.entries).toEqual([{ path: '/path', state: { kind: 'directory' } }])
     })
     expect(baseline.entries).toEqual([{ path: '/path', state: { kind: 'missing' } }])
   })

@@ -1,6 +1,6 @@
 # TypeScript example CLI scenarios
 
-Source: [multiple_scenarios.test.ts](./multiple_scenarios.test.ts)
+Source: [multiple-scenarios.test.ts](./multiple-scenarios.test.ts)
 
 ## `prints greeting`
 
@@ -28,9 +28,9 @@ Verify successful execution with an exact greeting, including its final newline.
 
 ### Execution flow
 
-1. Inside the standard Vitest test callback, await `withEnvironment` with the image name, an inline command-and-assertion callback, and `context.signal`.
-2. Await `environment.run` with literal argv `['echo', 'hello from e2e']`, no working-directory override, and no environment overrides.
-3. Use `context.expect(...).toEqual(...)` to compare all actual fields with `{ exitCode: 0, stdout: 'hello from e2e\n', stderr: '' }`.
+1. Inside the standard Vitest test callback, await `withEnvironment` with the image name, a command callback, and the test context's signal.
+2. Return `environment.run` with literal argv `['echo', 'hello from e2e']`, no working-directory override, and no environment overrides.
+3. Use the test context's `expect(result).toStrictEqual(...)` to compare all actual fields with `{ exitCode: 0, stderr: '', stdout: 'hello from e2e\n' }`.
 
 ### Expected results
 
@@ -74,9 +74,9 @@ Verify that an expected nonzero application status does not become a harness fai
 
 ### Execution flow
 
-1. Inside the separate standard Vitest test callback, await `withEnvironment` with the image name, an inline command-and-assertion callback, and `context.signal`.
-2. Await `environment.run` with literal argv `['false']`, retaining the image working directory and default environment.
-3. Use `context.expect(...).toEqual(...)` to compare all actual fields with `{ exitCode: 1, stdout: '', stderr: '' }`.
+1. Inside the separate standard Vitest test callback, await `withEnvironment` with the image name, a command callback, and the test context's signal.
+2. Return `environment.run` with literal argv `['false']`, retaining the image working directory and default environment.
+3. Use the test context's `expect(result).toStrictEqual(...)` to compare all actual fields with `{ exitCode: 1, stderr: '', stdout: '' }`.
 
 ### Expected results
 

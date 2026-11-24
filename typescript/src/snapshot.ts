@@ -1,5 +1,5 @@
-import { invokeDriver, driverRecord, driverBytes } from './driver.js'
-import type { Environment } from './environment.js'
+import { invokeDriver, driverRecord, driverBytes } from './driver.ts'
+import type { Environment } from './environment.ts'
 
 export type FileState =
   | { readonly kind: 'missing' }
@@ -17,50 +17,71 @@ export interface FilesystemSnapshot {
   readonly entries: readonly SnapshotEntry[]
 }
 
-function copyState(state: FileState): FileState {
-  if (state.kind === 'symlink') return Object.freeze({ kind: 'symlink', target: Buffer.from(state.target) })
-  return Object.freeze(state.kind === 'file' ? { kind: 'file', bytes: Buffer.from(state.bytes) } : { ...state })
+const copyState = (state: FileState): FileState => {
+  if (state.kind === 'symlink') {
+    return Object.freeze({ kind: 'symlink', target: Buffer.from(state.target) })
+  }
+  return Object.freeze(state.kind === 'file' ? { bytes: Buffer.from(state.bytes), kind: 'file' } : { ...state })
 }
 
-function snapshot(entries: readonly SnapshotEntry[]): FilesystemSnapshot {
-  return Object.freeze({
+const snapshot = (entries: readonly SnapshotEntry[]): FilesystemSnapshot =>
+  Object.freeze({
     get entries(): readonly SnapshotEntry[] {
       return Object.freeze(entries.map(({ path, state }) => Object.freeze({ path, state: copyState(state) })))
     },
   })
-}
 
-export async function captureSnapshot(environment: Environment, paths: readonly string[]): Promise<FilesystemSnapshot> {
-  const ordered = [...new Set(paths)].sort()
-  for (const path of ordered)
-    if (typeof path !== 'string' || !path || path.includes('\0'))
+export const captureSnapshot = async (
+  environment: Environment,
+  paths: readonly string[],
+): Promise<FilesystemSnapshot> => {
+  const ordered = [...new Set(paths)].toSorted()
+  for (const path of ordered) {
+    if (typeof path !== 'string' || !path || path.includes('\0')) {
       throw new TypeError('Snapshot paths must be nonempty NUL-free strings')
-  if (!ordered.length) return snapshot([])
+    }
+  }
+  if (!ordered.length) {
+    return snapshot([])
+  }
   const states = await invokeDriver(environment, 'snapshot', { paths: ordered })
-  if (!Array.isArray(states) || states.length !== ordered.length)
+  if (!Array.isArray(states) || states.length !== ordered.length) {
     throw new Error('Invalid snapshot classification response')
+  }
   const entries: SnapshotEntry[] = []
   for (const [index, path] of ordered.entries()) {
     const state = driverRecord(states[index])
-    if (state['path'] !== path) throw new Error('Invalid snapshot path')
+    if (state['path'] !== path) {
+      throw new Error('Invalid snapshot path')
+    }
     const data = driverBytes(state['data'])
     const target = driverBytes(state['target'])
     switch (state['kind']) {
       case 'missing':
-      case 'directory':
-        if (data.length || target.length) throw new Error('Invalid snapshot state payload')
+      case 'directory': {
+        if (data.length || target.length) {
+          throw new Error('Invalid snapshot state payload')
+        }
         entries.push({ path, state: { kind: state['kind'] } })
         break
-      case 'file':
-        if (target.length) throw new Error('Invalid regular file target')
-        entries.push({ path, state: { kind: 'file', bytes: data } })
+      }
+      case 'file': {
+        if (target.length) {
+          throw new Error('Invalid regular file target')
+        }
+        entries.push({ path, state: { bytes: data, kind: 'file' } })
         break
-      case 'symlink':
-        if (data.length) throw new Error('Invalid symbolic link content')
+      }
+      case 'symlink': {
+        if (data.length) {
+          throw new Error('Invalid symbolic link content')
+        }
         entries.push({ path, state: { kind: 'symlink', target } })
         break
-      default:
+      }
+      default: {
         throw new Error('Unsupported snapshot state')
+      }
     }
   }
   return snapshot(entries)
