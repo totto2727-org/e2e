@@ -741,6 +741,26 @@ func start(r request) reply {
 	}
 	return result
 }
+func writeReply(connection *net.UnixConn, result reply, deadline time.Time) {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return
+	}
+	_ = connection.SetWriteDeadline(deadline)
+	// The socket deadline cannot interrupt JSON encoding before its first write.
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = json.NewEncoder(connection).Encode(result)
+	}()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
+}
+
 func serve(r request) reply {
 	ready := os.NewFile(3, "ready")
 	if ready == nil {
@@ -853,8 +873,7 @@ func serve(r request) reply {
 		if end := t.deadline.Add(100 * time.Millisecond); end.Before(writeDeadline) {
 			writeDeadline = end
 		}
-		_ = connection.SetWriteDeadline(writeDeadline)
-		_ = json.NewEncoder(connection).Encode(result)
+		writeReply(connection, result, writeDeadline)
 		_ = connection.Close()
 		if stopping {
 			return success(nil)
