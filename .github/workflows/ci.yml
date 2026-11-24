@@ -14,9 +14,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
-        with:
-          dev-shell: ci
+      # Use the Nix binary cache without waiting for Magic Nix Cache uploads after checks.
+      - uses: DeterminateSystems/determinate-nix-action@2a0be2498974c2b6327e19780488744384637d88 # v3.21.7
       - uses: totto2727-org/monorepo/.github/actions/setup-typescript@main
       - uses: totto2727-org/monorepo/.github/actions/setup-haskell@main
         with:
