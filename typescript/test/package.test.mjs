@@ -4,15 +4,17 @@ import * as cli from '@totto2727/caseyard'
 import { expect, test } from 'vitest'
 
 test('built package exposes only the public API through its declared entrypoints', () => {
-  expect(Object.keys(cli).sort()).toEqual([
-    'DeadlineError',
-    'DockerError',
-    'ExecutionError',
-    'TerminalError',
-    'installDriver',
-    'withEnvironment',
-    'withTerminal',
-  ])
+  expect(new Set(Object.keys(cli))).toEqual(
+    new Set([
+      'DeadlineError',
+      'DockerError',
+      'ExecutionError',
+      'TerminalError',
+      'installDriver',
+      'withEnvironment',
+      'withTerminal',
+    ]),
+  )
   expect(cli.withEnvironment).toBeTypeOf('function')
   expect(cli.withTerminal).toBeTypeOf('function')
   expect(cli.installDriver).toBeTypeOf('function')
@@ -21,8 +23,8 @@ test('built package exposes only the public API through its declared entrypoints
     name: 'TerminalError',
     observation: captured,
   })
-  const error = new cli.ExecutionError({ stdout: 'captured', stderr: '' }, new cli.DeadlineError())
-  expect(error).toMatchObject({ partialResult: { stdout: 'captured', stderr: '' }, cause: { name: 'DeadlineError' } })
+  const error = new cli.ExecutionError({ stderr: '', stdout: 'captured' }, new cli.DeadlineError())
+  expect(error).toMatchObject({ cause: { name: 'DeadlineError' }, partialResult: { stderr: '', stdout: 'captured' } })
 })
 
 test('does not expose a retired framework adapter or transport internals', () => {

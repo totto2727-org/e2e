@@ -8,7 +8,7 @@ export class DockerError extends Error {
   }
 }
 
-export function dockerFailure(cause: unknown): DockerError {
+export const dockerFailure = (cause: unknown): DockerError => {
   const statusCode =
     cause instanceof Error && 'statusCode' in cause && typeof cause.statusCode === 'number'
       ? cause.statusCode

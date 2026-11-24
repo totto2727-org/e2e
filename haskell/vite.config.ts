@@ -7,21 +7,21 @@ const cache = { env, input: [{ auto: true }, '!dist-newstyle/**'], output: ['dis
 
 export default defineConfig({
   run: {
+    // Keep tasks ordered by dependencies where they share mutable build state.
     tasks: {
-      // Cabal planning and cache restoration share dist-newstyle/. Keep them ordered.
-      check: { command: 'just check', cache },
       build: {
+        cache,
         command: 'just build',
         dependsOn: ['check'],
-        cache,
       },
+      check: { cache, command: 'just check' },
+      ci: { command: '', dependsOn: ['check', 'build', 'test'] },
+      e2e: { cache: false, command: 'just e2e' },
       test: {
+        cache,
         command: 'just test',
         dependsOn: ['build'],
-        cache,
       },
-      e2e: { command: 'just e2e', cache: false },
-      ci: { command: '', dependsOn: ['check', 'build', 'test'] },
     },
   },
 })
