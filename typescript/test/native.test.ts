@@ -25,7 +25,11 @@ const backend = vi.hoisted(() => {
     copyArchiveFromContainer: vi.fn<StartedTestContainer['copyArchiveFromContainer']>(),
     stop: vi.fn<StartedTestContainer['stop']>(),
   }
-  return { container, start: vi.fn(async () => container) }
+  return {
+    container,
+    start: vi.fn(async () => container),
+    withLabels: vi.fn<(labels: Record<string, string>) => void>().mockReturnThis(),
+  }
 })
 
 // Substitute only the external Testcontainers boundary, not Docker's wire protocol.
@@ -35,7 +39,7 @@ vi.mock('testcontainers', async (importOriginal) => {
     ...actual,
     GenericContainer: vi.fn(function () {
       return {
-        withLabels: vi.fn().mockReturnThis(),
+        withLabels: backend.withLabels,
         withPullPolicy: vi.fn().mockReturnThis(),
         withStartupTimeout: vi.fn().mockReturnThis(),
         start: backend.start,
@@ -47,6 +51,7 @@ vi.mock('testcontainers', async (importOriginal) => {
 const empty = { exitCode: 0, stdout: '', stderr: '' }
 beforeEach(() => {
   backend.start.mockReset().mockResolvedValue(backend.container)
+  backend.withLabels.mockClear()
   backend.container.exec.mockReset().mockResolvedValue({ ...empty, output: '' })
   backend.container.copyContentToContainer.mockReset().mockResolvedValue()
   backend.container.copyArchiveFromContainer.mockReset()
@@ -148,6 +153,14 @@ describe('Commands', () => {
 })
 
 describe('Scope lifecycle', () => {
+  test('assigns a fresh UUIDv4 ownership label to every container scope', async () => {
+    await Promise.all([scoped(async () => {}), scoped(async () => {})])
+
+    const owners = backend.withLabels.mock.calls.map(([labels]) => labels['org.totto2727.e2e.owner'])
+    const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    expect(owners).toEqual([expect.stringMatching(uuidV4), expect.stringMatching(uuidV4)])
+    expect(new Set(owners).size).toBe(2)
+  })
   test('returns arbitrary callback results after cleanup and closes its signal', async () => {
     const value = { value: 42 }
     let signal!: AbortSignal

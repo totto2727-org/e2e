@@ -1,10 +1,14 @@
-import { randomUUID } from 'node:crypto'
-
+import * as SecureRandom from 'effect/crypto/SecureRandom'
+import * as Effect from 'effect/Effect'
 import { GenericContainer, PullPolicy, log, type StartedTestContainer } from 'testcontainers'
 
 import { untilCancelled } from './cancellation.js'
 import { DockerEnvironment, type Environment } from './environment.js'
 import { dockerFailure } from './errors.js'
+
+const randomOwner = SecureRandom.SecureRandom.use((random) => random.uuidV4()).pipe(
+  Effect.provide(SecureRandom.layerWebCrypto),
+)
 
 export class DeadlineError extends Error {
   constructor() {
@@ -57,7 +61,7 @@ export async function withEnvironment<T>(
     if (typeof image !== 'string' || !image || image.includes('\0'))
       throw new TypeError('Image must be a nonempty NUL-free string')
     starting = new GenericContainer(image)
-      .withLabels({ 'org.totto2727.e2e.owner': randomUUID() })
+      .withLabels({ 'org.totto2727.e2e.owner': Effect.runSync(randomOwner) })
       .withPullPolicy(PullPolicy.neverPull())
       .withStartupTimeout(60_000)
       .start()
